@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP mock sequences across turns** - Finite MCP mock sequences now continue across initial, scripted follow-up, and responder-driven turns in one task attempt, even when the native runtime restarts the mock server. Each task, trial, and retry still starts fresh, and existing first-match and exhaustion behavior is unchanged.
+
 ## [0.39.1] - 2026-10-26
 
 ### Fixed

@@ -2,6 +2,7 @@ package copilotconfig
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,7 +30,7 @@ func ConvertMCPServersWithMocks(serverConfigs map[string]any, mocks []models.MCP
 // ConvertMCPServersWithVersion permits finite mock responses only when the
 // enclosing eval schema version explicitly supports them.
 func ConvertMCPServersWithVersion(serverConfigs map[string]any, mocks []models.MCPMockConfig, baseDir, version string, warnf func(string, ...any)) map[string]copilot.MCPServerConfig {
-	servers, err := convertMCPServers(serverConfigs, mocks, baseDir, version, warnf, false)
+	servers, err := convertMCPServers(serverConfigs, mocks, baseDir, version, warnf, false, nil)
 	if err != nil && warnf != nil {
 		warnf("Warning: MCP configuration failed: %v\n", err)
 	}
@@ -39,10 +40,86 @@ func ConvertMCPServersWithVersion(serverConfigs map[string]any, mocks []models.M
 // ResolveMCPServersWithVersion fails execution admission rather than dropping a
 // declared mock. The conversion-only adapters retain their legacy warning policy.
 func ResolveMCPServersWithVersion(serverConfigs map[string]any, mocks []models.MCPMockConfig, baseDir, version string, warnf func(string, ...any)) (map[string]copilot.MCPServerConfig, error) {
-	return convertMCPServers(serverConfigs, mocks, baseDir, version, warnf, true)
+	return convertMCPServers(serverConfigs, mocks, baseDir, version, warnf, true, nil)
 }
 
-func convertMCPServers(serverConfigs map[string]any, mocks []models.MCPMockConfig, baseDir, version string, warnf func(string, ...any), strict bool) (map[string]copilot.MCPServerConfig, error) {
+// MCPMockAttempt owns persistent mock configuration and finite sequence state
+// shared by every actor turn in one task attempt.
+type MCPMockAttempt struct {
+	dir string
+}
+
+// ResolveMCPServersForAttempt fails admission like ResolveMCPServersWithVersion.
+// Mock servers may restart between turns without resetting finite sequences.
+// The caller must Close the returned attempt after the final turn.
+func ResolveMCPServersForAttempt(serverConfigs map[string]any, mocks []models.MCPMockConfig, baseDir, version string, warnf func(string, ...any)) (map[string]copilot.MCPServerConfig, *MCPMockAttempt, error) {
+	attempt := &MCPMockAttempt{}
+	servers, err := convertMCPServers(serverConfigs, mocks, baseDir, version, warnf, true, attempt.serverConfig)
+	if err != nil {
+		return nil, nil, errors.Join(err, attempt.Close())
+	}
+	if attempt.dir == "" {
+		return servers, nil, nil
+	}
+	return servers, attempt, nil
+}
+
+// Close removes this attempt's configuration and sequence state. It is safe on
+// nil and repeated calls.
+func (a *MCPMockAttempt) Close() error {
+	if a == nil || a.dir == "" {
+		return nil
+	}
+	dir := a.dir
+	a.dir = ""
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove MCP mock attempt state %s: %w", dir, err)
+	}
+	return nil
+}
+
+func (a *MCPMockAttempt) serverConfig(cfg mcpmock.Config) (copilot.MCPStdioServerConfig, error) {
+	if a.dir == "" {
+		dir, err := os.MkdirTemp("", "waza-mcp-attempt-*")
+		if err != nil {
+			return copilot.MCPStdioServerConfig{}, fmt.Errorf("create MCP mock attempt directory: %w", err)
+		}
+		a.dir = dir
+	}
+	mockDir, err := os.MkdirTemp(a.dir, "mock-*")
+	if err != nil {
+		return copilot.MCPStdioServerConfig{}, fmt.Errorf("create MCP mock %q attempt directory: %w", cfg.Name, err)
+	}
+	if err := mcpmock.PrepareSequenceState(&cfg, filepath.Join(mockDir, "state")); err != nil {
+		return copilot.MCPStdioServerConfig{}, err
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return copilot.MCPStdioServerConfig{}, fmt.Errorf("marshal mock config: %w", err)
+	}
+	configFile := filepath.Join(mockDir, "config.json")
+	if err := writeExclusiveFile(configFile, data); err != nil {
+		return copilot.MCPStdioServerConfig{}, fmt.Errorf("write mock config file: %w", err)
+	}
+	return mockStdioConfig("--attempt-config-file", configFile)
+}
+
+func writeExclusiveFile(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	return file.Close()
+}
+
+func convertMCPServers(serverConfigs map[string]any, mocks []models.MCPMockConfig, baseDir, version string, warnf func(string, ...any), strict bool, materialize func(mcpmock.Config) (copilot.MCPStdioServerConfig, error)) (map[string]copilot.MCPServerConfig, error) {
+	ownedState := materialize != nil
+	if materialize == nil {
+		materialize = mockServerConfig
+	}
 	if warnf == nil {
 		warnf = func(string, ...any) {}
 	}
@@ -99,8 +176,11 @@ func convertMCPServers(serverConfigs map[string]any, mocks []models.MCPMockConfi
 	}
 	var createdPaths []string
 	for _, cfg := range resolved {
-		stdio, err := mockServerConfig(cfg)
+		stdio, err := materialize(cfg)
 		if err != nil {
+			if strict && ownedState {
+				return nil, fmt.Errorf("configure MCP mock %q: %w", cfg.Name, err)
+			}
 			if strict {
 				return nil, fmt.Errorf("configure MCP mock %q (earlier temporary config files: %v): %w", cfg.Name, createdPaths, err)
 			}
@@ -144,10 +224,6 @@ func defaultMCPTools(cfgMap map[string]any, tools *[]string) {
 }
 
 func mockServerConfig(cfg mcpmock.Config) (copilot.MCPStdioServerConfig, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return copilot.MCPStdioServerConfig{}, fmt.Errorf("resolve waza executable: %w", err)
-	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return copilot.MCPStdioServerConfig{}, fmt.Errorf("marshal mock config: %w", err)
@@ -156,9 +232,21 @@ func mockServerConfig(cfg mcpmock.Config) (copilot.MCPStdioServerConfig, error) 
 	if err != nil {
 		return copilot.MCPStdioServerConfig{}, err
 	}
+	stdio, err := mockStdioConfig("--config-file", configFile)
+	if err != nil {
+		return copilot.MCPStdioServerConfig{}, errors.Join(err, os.Remove(configFile))
+	}
+	return stdio, nil
+}
+
+func mockStdioConfig(flag, configFile string) (copilot.MCPStdioServerConfig, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return copilot.MCPStdioServerConfig{}, fmt.Errorf("resolve waza executable: %w", err)
+	}
 	return copilot.MCPStdioServerConfig{
 		Command: exe,
-		Args:    []string{"__mcp-mock", "--config-file", configFile},
+		Args:    []string{"__mcp-mock", flag, configFile},
 		// The bundled CLI rejects mock servers when the allowlist is omitted.
 		Tools: []string{"*"},
 		Env: map[string]string{

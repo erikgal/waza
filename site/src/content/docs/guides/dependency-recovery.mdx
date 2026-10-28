@@ -34,8 +34,10 @@ outputs, and bounds in the same response: those still fail non-strict preflight.
 Execution rejects invalid selected MCP fixtures before initializing the agent.
 Whole-tool inline overrides replace discarded fixture responses before admission.
 MCP subprocess setup errors also fail execution instead of dropping the mock.
-Temporary configuration creation is not a transaction: a late setup error lists
-any earlier generated configuration paths for inspection and cleanup.
+Single-request legacy conversion is not a transaction: a late setup error lists
+any earlier generated configuration paths for inspection and cleanup. Task
+attempts own their MCP mock configuration and remove partial setup before
+reporting the error.
 
 Execution invokes the configured Copilot SDK agent and therefore requires its
 normal runtime credentials:
@@ -50,7 +52,16 @@ The finite `sequence` field belongs to a matching MCP or CLI response; every
 call consumes one step, in order, and an exhausted sequence fails closed.
 Sequences contain at most 100 steps; each optional `delay_ms` is limited to
 300,000 and excessive values are rejected during source admission, before execution.
-Sequence state is scoped to the task's mock session/server instance.
+Sequence state is scoped to one task attempt. Initial, scripted follow-up, and
+responder-driven turns in that attempt share progress even when the runtime
+restarts the MCP mock subprocess after resuming the session. Every task, trial,
+and retry starts at the first step. The first matching response still owns the
+call: when its sequence is exhausted, later matching responses are not used.
+Concurrent calls reserve distinct steps; their completion order can differ.
+Waza removes the attempt-owned MCP configuration and state after the attempt,
+including after setup failures; a cleanup failure is logged with its path.
+A mock call is not a native user-input callback or proof of an external host UI
+effect.
 There is no automatic retry policy: the agent decides whether to call again,
 and the task graders decide whether its final behavior is acceptable.
 

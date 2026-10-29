@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	copilot "github.com/github/copilot-sdk/go"
@@ -201,14 +202,37 @@ func TestMCPMockAttemptClosePreservesReplacementDirectories(t *testing.T) {
 				path = configFile
 			}
 			moved := path + "-moved"
-			err = os.Rename(path, moved)
-			if runtime.GOOS == "windows" && replacement == "parent" && err != nil {
-				require.ErrorIs(t, err, os.ErrPermission)
-				require.NoError(t, attempt.Close(), "the retained parent can prevent renaming outright")
-				require.NoFileExists(t, configFile)
+			renameErr := os.Rename(path, moved)
+			if runtime.GOOS == "windows" && renameErr != nil {
+				require.ErrorIs(t, renameErr, syscall.Errno(32), "only a Windows sharing violation is an expected retained-root pin")
+				_, rootErr := attempt.root.Stat(".")
+				require.NoError(t, rootErr, "the retained attempt root must remain usable while pinned")
+				require.NoError(t, attempt.root.Close())
+				attempt.root = nil
+				if kind == "parent" {
+					_, parentErr := attempt.parent.Stat(".")
+					require.NoError(t, parentErr, "the retained parent must remain usable while pinned")
+				}
+				require.NoError(t, attempt.parent.Close())
+				attempt.parent = nil
+				require.NoError(t, os.Rename(path, moved), "closing the owning roots must release the Windows pin")
+				relativeConfig, err = filepath.Rel(path, configFile)
+				require.NoError(t, err)
+				switch kind {
+				case "attempt", "parent", "mock", "config":
+					movedConfig := filepath.Join(moved, relativeConfig)
+					retained, err := os.ReadFile(movedConfig)
+					require.NoError(t, err)
+					require.Equal(t, configBody, retained)
+					info, err := os.Stat(movedConfig)
+					require.NoError(t, err)
+					require.True(t, os.SameFile(configIdentity, info))
+				case "state", "sequence":
+					require.DirExists(t, moved, "replaced sequence state must be retained")
+				}
 				return
 			}
-			require.NoError(t, err)
+			require.NoError(t, renameErr)
 			relativeConfig, err = filepath.Rel(path, configFile)
 			require.NoError(t, err)
 			if kind == "attempt" || kind == "parent" || kind == "mock" || kind == "config" {

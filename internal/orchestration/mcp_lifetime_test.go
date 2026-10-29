@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	copilot "github.com/github/copilot-sdk/go"
@@ -163,13 +164,21 @@ func TestExecuteRunMCPMockCleanupPreservesReplacementAndFailsRun(t *testing.T) {
 			if executionFails {
 				engine.executeErr = errors.New("original execution failure")
 			}
-			var sentinel, retainedConfig, attemptDir string
+			var sentinel, retainedConfig, attemptDir, originalConfig string
+			renameBlocked := false
 			engine.afterExecute = func(configFile string) {
+				originalConfig = configFile
 				attemptDir = filepath.Dir(filepath.Dir(configFile))
 				moved := attemptDir + "-moved"
 				relative, err := filepath.Rel(attemptDir, configFile)
 				require.NoError(t, err)
-				require.NoError(t, os.Rename(attemptDir, moved))
+				renameErr := os.Rename(attemptDir, moved)
+				if runtime.GOOS == "windows" && renameErr != nil {
+					require.ErrorIs(t, renameErr, syscall.Errno(32), "only a Windows sharing violation is an expected retained-root pin")
+					renameBlocked = true
+					return
+				}
+				require.NoError(t, renameErr)
 				require.NoError(t, os.Mkdir(attemptDir, 0700))
 				sentinel = filepath.Join(attemptDir, "unrelated")
 				require.NoError(t, os.WriteFile(sentinel, []byte("preserve replacement"), 0600))
@@ -179,6 +188,19 @@ func TestExecuteRunMCPMockCleanupPreservesReplacementAndFailsRun(t *testing.T) {
 
 			require.Len(t, engine.results, 1, "the regression must reach actual attempt execution")
 			require.Contains(t, engine.results[0], `{\"ordinal\":1}`)
+			if renameBlocked {
+				require.NoFileExists(t, originalConfig, "successful cleanup must remove the retained configuration")
+				require.NoError(t, os.Mkdir(attemptDir, 0700))
+				require.NoError(t, os.Rename(attemptDir, attemptDir+"-moved"), "production cleanup must close the owning root and release the Windows pin")
+				if executionFails {
+					require.Equal(t, models.StatusError, run.Status)
+					require.Contains(t, run.ErrorMsg, "original execution failure")
+				} else {
+					require.NotEqual(t, models.StatusError, run.Status, run.ErrorMsg)
+					require.True(t, engine.response.Success)
+				}
+				return
+			}
 			body, err := os.ReadFile(sentinel)
 			require.NoError(t, err, "attempt cleanup must not recursively remove the replacement directory")
 			require.Equal(t, "preserve replacement", string(body))

@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -130,9 +132,35 @@ func TestPrepareSequenceStateUsesRetainedParent(t *testing.T) {
 	require.NoError(t, os.Mkdir(path, 0700))
 	root, err := os.OpenRoot(path)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, root.Close()) }()
+	rootClosed := false
+	t.Cleanup(func() {
+		if !rootClosed {
+			require.NoError(t, root.Close())
+		}
+	})
 	moved := path + "-moved"
-	require.NoError(t, os.Rename(path, moved))
+	renameErr := os.Rename(path, moved)
+	if runtime.GOOS == "windows" && renameErr != nil {
+		require.ErrorIs(t, renameErr, syscall.Errno(32), "only a Windows sharing violation is an expected retained-root pin")
+		require.NoError(t, PrepareSequenceState(&Config{Name: "counter", Tools: map[string]Tool{
+			"read": {Responses: []Response{{Sequence: []ResponseStep{{Return: "ok"}}}}},
+		}}, root, "state"))
+		_, err = root.Stat("state")
+		require.NoError(t, err, "the pinned retained root must remain usable")
+		require.DirExists(t, sequenceStateDir(filepath.Join(path, "state"), 0, 0), "the pinned retained root must remain usable")
+		require.NoError(t, root.Close())
+		rootClosed = true
+		require.NoError(t, os.Rename(path, moved), "closing the owning root must release the Windows pin")
+		require.DirExists(t, sequenceStateDir(filepath.Join(moved, "state"), 0, 0))
+		require.NoError(t, os.Mkdir(path, 0700))
+		sentinel := filepath.Join(path, "sentinel")
+		require.NoError(t, os.WriteFile(sentinel, []byte("unrelated"), 0600))
+		body, err := os.ReadFile(sentinel)
+		require.NoError(t, err)
+		require.Equal(t, "unrelated", string(body))
+		return
+	}
+	require.NoError(t, renameErr)
 	require.NoError(t, os.Mkdir(path, 0700))
 	sentinel := filepath.Join(path, "sentinel")
 	require.NoError(t, os.WriteFile(sentinel, []byte("unrelated"), 0600))

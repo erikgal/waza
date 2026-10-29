@@ -158,8 +158,16 @@ func (a *MCPMockAttempt) removeEntry(parent *os.Root, name, relative string, moc
 	if err != nil {
 		return fmt.Errorf("open MCP mock cleanup directory %s: %w", path, err)
 	}
+	rootClosed := false
+	closeRoot := func() error {
+		if rootClosed {
+			return nil
+		}
+		rootClosed = true
+		return root.Close()
+	}
 	defer func() {
-		if err := root.Close(); err != nil {
+		if err := closeRoot(); err != nil {
 			resultErr = errors.Join(resultErr, fmt.Errorf("close MCP mock cleanup directory %s: %w", path, err))
 		}
 	}()
@@ -192,6 +200,9 @@ func (a *MCPMockAttempt) removeEntry(parent *os.Root, name, relative string, moc
 		}
 	}
 	if resultErr == nil {
+		if err := closeRoot(); err != nil {
+			return fmt.Errorf("close MCP mock cleanup directory %s: %w", path, err)
+		}
 		current, err = parent.Lstat(name)
 		if err != nil || !os.SameFile(current, identity) {
 			return fmt.Errorf("MCP mock entry identity changed during cleanup at %s: %w", path, errors.Join(err, errors.New("refusing cleanup of replacement")))

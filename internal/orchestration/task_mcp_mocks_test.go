@@ -160,6 +160,27 @@ func TestBuildExecutionRequest_TaskMCPMocksReplaceByName(t *testing.T) {
 	require.DirExists(t, dir)
 }
 
+func TestBuildExecutionRequest_TaskMCPFixturesResolveFromEvalDir(t *testing.T) {
+	runner, dir := writeTaskMCPMockEval(t, "1.1", map[string]string{"fixture.yaml": `id: fixture
+name: Fixture
+inputs:
+  prompt: hi
+mcp_mocks:
+  - name: host
+    fixtures: mcp/host
+`})
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "mcp", "host"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mcp", "host", "ask_user.json"),
+		[]byte(`{"responses":[{"return":{"answer":"from eval-relative fixture"}}]}`), 0o600))
+	tasks, err := runner.loadTestCases()
+	require.NoError(t, err, "a task in tasks/ resolves fixtures from the eval directory")
+	require.Len(t, tasks, 1)
+	req, err := runner.buildExecutionRequest(tasks[0])
+	require.NoError(t, err)
+	require.Equal(t, "from eval-relative fixture", firstAnswer(t, readMockConfigFile(t, stdioArgs(t, req, "host")), "ask_user"))
+	readMockConfigFile(t, stdioArgs(t, req, "docs"))
+}
+
 func TestControlledAndNativeGatesRejectTaskMCPMocks(t *testing.T) {
 	task := &models.TestCase{TestID: "t", MCPMocks: []models.MCPMockConfig{{Name: "host"}}}
 	controlled := &models.EvalSpec{Scenario: "s", Config: models.Config{EngineType: "mock"}}

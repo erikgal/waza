@@ -346,6 +346,8 @@ mcp_mocks:
 
 Response entries are checked in order. Unknown tools and unmatched calls fail loudly with a tool error that names the missing mock fixture. Finite `sequence` responses are available only in scenario evals using exact `schemaVersion: "2.0"`; each matching call consumes one step, sequences contain 1–100 steps, and optional step delays are bounded at 300,000 ms.
 
+A task can replace an eval-level mock by name with its own [`mcp_mocks`](#mcp_mocks-optional) entry. Other eval-level mocks remain available to that task.
+
 Unmatched-call diagnostics omit argument values, including nested payloads. A
 canceled or expired context at the in-process handler's tool-call admission
 boundary produces an MCP `isError` result before matching or returning a fixture.

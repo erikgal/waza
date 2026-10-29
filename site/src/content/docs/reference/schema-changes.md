@@ -92,6 +92,8 @@ unchanged; it does not downgrade scenario discovery semantics to `1.x`.
 - Task YAML has no version selector. Task mocks require an enclosing eval
   `schemaVersion` of `1.1` or newer and `executor: copilot-sdk`, and finite
   sequences require scenario eval `2.0`. An empty list is rejected.
+- A task file that already contained `mcp_mocks` previously got an
+  unknown-field warning and the key was ignored; it is now applied.
 - Result cache keys include each task's effective MCP mocks with fixture
   contents. Tasks that use MCP mocks get new keys once; tasks without them
   keep their previous keys.

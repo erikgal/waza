@@ -1695,6 +1695,7 @@ A task can declare its own `mcp_mocks` when one case needs a different answer. E
 ```yaml
 # tasks/publish.yaml
 id: publish
+name: Publish when the user confirms
 inputs:
   prompt: Publish the reviewed version.
 mcp_mocks:

@@ -15,6 +15,22 @@ func answerMock(name, answer string) models.MCPMockConfig {
 	}}
 }
 
+// frozenNoMCPKey is CacheKey for frozenNoMCP* computed on main c8aad785, before
+// MCP mocks entered the key. Tasks with no effective MCP mocks must keep it.
+const frozenNoMCPKey = "f2eec41f13098ea3f110279e0d5c62f57d456f888a8d3875347d1dbe78fb433b"
+
+func TestCacheKey_NoMCPMocksKeepFrozenKey(t *testing.T) {
+	spec := &models.EvalSpec{SchemaVersion: "1.1", SpecIdentity: models.SpecIdentity{Name: "frozen"},
+		Config: models.Config{ModelID: "m", EngineType: "copilot-sdk", TimeoutSec: 30, TrialsPerTask: 1}}
+	task := &models.TestCase{TestID: "t", DisplayName: "t", Stimulus: models.TaskStimulus{Message: "go"}}
+	key, err := CacheKeyWithSpecDir(spec, task, "unused-fixtures", "unused-spec")
+	require.NoError(t, err)
+	require.Equal(t, frozenNoMCPKey, key)
+	key, err = CacheKey(spec, task, "unused-fixtures")
+	require.NoError(t, err)
+	require.Equal(t, frozenNoMCPKey, key)
+}
+
 func TestCacheKey_TaskMCPMocksChangeKey(t *testing.T) {
 	spec := &models.EvalSpec{SchemaVersion: "1.1", SpecIdentity: models.SpecIdentity{Name: "eval"}, Config: models.Config{ModelID: "m"}}
 	task := func(answer string) *models.TestCase {

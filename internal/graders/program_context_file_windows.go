@@ -14,16 +14,19 @@ import (
 )
 
 // programContextFile is a grading context file in a directory whose protected
-// DACL grants access only to the current user. While the grader program runs,
-// Waza holds a read handle without FILE_SHARE_DELETE, so the file cannot be
-// deleted or renamed. Cleanup reopens the path, verifies the file identity,
-// and deletes through that verified handle.
+// DACL grants access only to the current user. Waza holds a directory handle
+// without FILE_SHARE_DELETE from creation through cleanup, so the directory
+// cannot be renamed or replaced, and finally deletes it through that handle.
+// While the grader program runs, a file read handle without FILE_SHARE_DELETE
+// prevents deleting or renaming the file. Cleanup reopens the file inside the
+// retained directory, verifies its identity, and deletes through that handle.
 type programContextFile struct {
-	dir   string
-	path  string
-	guard windows.Handle
-	id    programContextFileID
-	hooks programContextHooks
+	dir      string
+	path     string
+	dirGuard windows.Handle
+	guard    windows.Handle
+	id       programContextFileID
+	hooks    programContextHooks
 }
 
 type programContextFileID struct {
@@ -52,13 +55,23 @@ func createProgramContextFile(data []byte, hooks programContextHooks) (_ *progra
 	if err := windows.CreateDirectory(dirPtr, dirSA); err != nil {
 		return nil, fmt.Errorf("creating private grading context directory %s: %w", dir, err)
 	}
-	f := &programContextFile{dir: dir, path: filepath.Join(dir, programContextFileName), guard: windows.InvalidHandle, hooks: hooks}
+	f := &programContextFile{dir: dir, path: filepath.Join(dir, programContextFileName), dirGuard: windows.InvalidHandle, guard: windows.InvalidHandle, hooks: hooks}
 	created := false
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, f.cleanup(created))
 		}
 	}()
+	dirGuard, err := windows.CreateFile(dirPtr, windows.DELETE|windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return nil, fmt.Errorf("opening grading context directory %s: %w", dir, err)
+	}
+	f.dirGuard = dirGuard
+	if err := checkDirectoryHandle(dirGuard); err != nil {
+		return nil, fmt.Errorf("grading context directory %s: %w", dir, err)
+	}
 	if hooks.created != nil {
 		hooks.created(f.path)
 	}
@@ -130,18 +143,35 @@ func (f *programContextFile) cleanup(created bool) error {
 		}
 		removed = f.removeVerified(&errs)
 	}
+	if f.dirGuard == windows.InvalidHandle {
+		// Without a verified handle the directory cannot be removed safely.
+		return errors.Join(append(errs, fmt.Errorf("grading context directory %s was left in place", f.dir))...)
+	}
+	dirGuard := f.dirGuard
+	f.dirGuard = windows.InvalidHandle
 	if removed {
-		dirPtr, err := windows.UTF16PtrFromString(f.dir)
-		if err == nil {
-			err = windows.RemoveDirectory(dirPtr)
-		}
-		if err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		deleteDir := byte(1) // FILE_DISPOSITION_INFO.DeleteFile
+		if err := windows.SetFileInformationByHandle(dirGuard, windows.FileDispositionInfo, &deleteDir, uint32(unsafe.Sizeof(deleteDir))); err != nil {
 			errs = append(errs, fmt.Errorf("removing grading context directory %s (left in place): %w", f.dir, err))
 		}
 	} else {
 		errs = append(errs, fmt.Errorf("grading context directory %s was left in place", f.dir))
 	}
+	if err := windows.CloseHandle(dirGuard); err != nil {
+		errs = append(errs, fmt.Errorf("closing grading context directory %s: %w", f.dir, err))
+	}
 	return errors.Join(errs...)
+}
+
+func checkDirectoryHandle(h windows.Handle) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		return err
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		return errors.New("not a plain directory")
+	}
+	return nil
 }
 
 func (f *programContextFile) removeVerified(errs *[]error) bool {

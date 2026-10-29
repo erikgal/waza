@@ -137,3 +137,41 @@ func TestProgramContextFile_ExtraEntriesAreNotDeleted(t *testing.T) {
 	require.NoFileExists(t, path, "the verified context file is still removed")
 	require.FileExists(t, filepath.Join(filepath.Dir(path), "extra.txt"))
 }
+
+func TestProgramContextFile_ParentDirectoryReplacementIsNotRemoved(t *testing.T) {
+	for _, replacement := range []string{"empty directory", "regular file"} {
+		t.Run(replacement, func(t *testing.T) {
+			var renameErr error
+			var moved string
+			_, path, err := gradeWithContextHooks(t, "pass", programContextHooks{
+				beforeRemove: func(p string) {
+					dir := filepath.Dir(p)
+					moved = dir + ".moved"
+					if renameErr = os.Rename(dir, moved); renameErr != nil {
+						return
+					}
+					t.Cleanup(func() { require.NoError(t, os.RemoveAll(moved)) })
+					if replacement == "empty directory" {
+						require.NoError(t, os.Mkdir(dir, 0o700))
+					} else {
+						require.NoError(t, os.WriteFile(dir, []byte("user data"), 0o600))
+					}
+				},
+			})
+			dir := filepath.Dir(path)
+			if runtime.GOOS == "windows" {
+				// The retained directory handle denies renaming the directory.
+				require.Error(t, renameErr)
+				require.NoError(t, err)
+				require.NoDirExists(t, dir)
+				return
+			}
+			require.NoError(t, renameErr)
+			require.ErrorContains(t, err, "grading context directory "+dir+" was replaced")
+			require.NoFileExists(t, filepath.Join(moved, programContextFileName), "the verified context file is still removed from the moved directory")
+			info, statErr := os.Lstat(dir)
+			require.NoError(t, statErr, "the replacement must be preserved")
+			require.Equal(t, replacement == "empty directory", info.IsDir())
+		})
+	}
+}

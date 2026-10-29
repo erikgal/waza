@@ -13,16 +13,18 @@ import (
 // programContextFile is a grading context file in a private (0700) directory.
 // The creating descriptor stays open until cleanup so the file's identity
 // cannot be reused, and removal happens relative to the retained directory
-// handle only after verifying the entry is still that file. Unix has no
-// unlink-by-descriptor, so a replacement made by a still-running process
-// between verification and unlink is not prevented.
+// handle only after verifying the entry is still that file. The directory is
+// removed by path only after verifying it is still the directory Waza created.
+// Unix has no unlink-by-descriptor, so a replacement made by a still-running
+// process between verification and removal is not prevented.
 type programContextFile struct {
-	dir   string
-	path  string
-	root  *os.Root
-	guard *os.File
-	info  os.FileInfo
-	hooks programContextHooks
+	dir     string
+	path    string
+	root    *os.Root
+	dirInfo os.FileInfo
+	guard   *os.File
+	info    os.FileInfo
+	hooks   programContextHooks
 }
 
 func createProgramContextFile(data []byte, hooks programContextHooks) (_ *programContextFile, err error) {
@@ -49,6 +51,7 @@ func createProgramContextFile(data []byte, hooks programContextHooks) (_ *progra
 	if !dirInfo.IsDir() || dirInfo.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("grading context directory %s is not private (mode %v)", dir, dirInfo.Mode().Perm())
 	}
+	f.dirInfo = dirInfo
 	if f.guard, err = f.root.OpenFile(programContextFileName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err != nil {
 		return nil, err
 	}
@@ -83,13 +86,34 @@ func (f *programContextFile) remove() error {
 		f.root = nil
 	}
 	if removed {
-		if err := os.Remove(f.dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			errs = append(errs, fmt.Errorf("removing grading context directory %s (left in place): %w", f.dir, err))
+		if err := f.removeVerifiedDir(); err != nil {
+			errs = append(errs, err)
 		}
 	} else {
 		errs = append(errs, fmt.Errorf("grading context directory %s was left in place", f.dir))
 	}
 	return errors.Join(errs...)
+}
+
+// removeVerifiedDir removes the directory path only while it still names the
+// directory Waza created; a moved original or a replacement is left in place.
+func (f *programContextFile) removeVerifiedDir() error {
+	if f.dirInfo == nil {
+		return fmt.Errorf("grading context directory %s identity is unknown; it was left in place", f.dir)
+	}
+	current, err := os.Lstat(f.dir)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("grading context directory %s was moved; it was not removed", f.dir)
+	case err != nil:
+		return fmt.Errorf("inspecting grading context directory %s (left in place): %w", f.dir, err)
+	case !os.SameFile(f.dirInfo, current):
+		return fmt.Errorf("grading context directory %s was replaced; the replacement was left in place", f.dir)
+	}
+	if err := os.Remove(f.dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing grading context directory %s (left in place): %w", f.dir, err)
+	}
+	return nil
 }
 
 func (f *programContextFile) removeVerified(errs *[]error) bool {

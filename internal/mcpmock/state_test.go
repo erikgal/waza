@@ -22,8 +22,16 @@ func attemptStateConfig(t *testing.T) *Config {
 		}},
 		"write": {Responses: []Response{{Sequence: []ResponseStep{{Return: "written"}}}}},
 	}}
-	require.NoError(t, PrepareSequenceState(cfg, filepath.Join(t.TempDir(), "state")))
+	prepareAttemptState(t, cfg)
 	return cfg
+}
+
+func prepareAttemptState(t *testing.T, cfg *Config) {
+	t.Helper()
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, PrepareSequenceState(cfg, root, "state"))
+	require.NoError(t, root.Close())
 }
 
 func TestAttemptSequenceStateSurvivesServerRestarts(t *testing.T) {
@@ -86,7 +94,7 @@ func TestAttemptSequenceStateCancellationConsumesStartedStep(t *testing.T) {
 			{Return: "recovered"},
 		}}}},
 	}}
-	require.NoError(t, PrepareSequenceState(cfg, filepath.Join(t.TempDir(), "state")))
+	prepareAttemptState(t, cfg)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := NewServer(cfg, nil).call(ctx, "read", map[string]any{})
@@ -102,8 +110,40 @@ func TestAttemptSequenceStateReportsUnavailableState(t *testing.T) {
 
 func TestPrepareSequenceStateRejectsUnsafeRoots(t *testing.T) {
 	cfg := &Config{Name: "counter", Tools: map[string]Tool{}}
-	require.ErrorContains(t, PrepareSequenceState(cfg, "relative"), "absolute private path")
-	existing := t.TempDir()
-	require.ErrorContains(t, PrepareSequenceState(cfg, existing), "create mcp mock sequence state")
+	require.ErrorContains(t, PrepareSequenceState(nil, nil, "state"), "requires a configuration")
+	require.ErrorContains(t, PrepareSequenceState(cfg, nil, "state"), "absolute private path")
+	root, err := os.OpenRoot(t.TempDir())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, root.Close()) }()
+	for _, name := range []string{"", ".", "..", "../state", filepath.Join("nested", "state"), root.Name()} {
+		require.ErrorContains(t, PrepareSequenceState(cfg, root, name), "absolute private path")
+		require.Empty(t, cfg.StateDir)
+	}
+	require.NoError(t, root.Mkdir("existing", 0700))
+	require.ErrorContains(t, PrepareSequenceState(cfg, root, "existing"), "create mcp mock sequence state")
 	require.Empty(t, cfg.StateDir)
+}
+
+func TestPrepareSequenceStateUsesRetainedParent(t *testing.T) {
+	parent := t.TempDir()
+	path := filepath.Join(parent, "owned")
+	require.NoError(t, os.Mkdir(path, 0700))
+	root, err := os.OpenRoot(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, root.Close()) }()
+	moved := path + "-moved"
+	require.NoError(t, os.Rename(path, moved))
+	require.NoError(t, os.Mkdir(path, 0700))
+	sentinel := filepath.Join(path, "sentinel")
+	require.NoError(t, os.WriteFile(sentinel, []byte("unrelated"), 0600))
+
+	cfg := &Config{Name: "counter", Tools: map[string]Tool{
+		"read": {Responses: []Response{{Sequence: []ResponseStep{{Return: "ok"}}}}},
+	}}
+	require.NoError(t, PrepareSequenceState(cfg, root, "state"))
+	require.DirExists(t, sequenceStateDir(filepath.Join(moved, "state"), 0, 0))
+	require.NoDirExists(t, filepath.Join(path, "state"), "creation must not reopen the saved pathname")
+	body, err := os.ReadFile(sentinel)
+	require.NoError(t, err)
+	require.Equal(t, "unrelated", string(body))
 }

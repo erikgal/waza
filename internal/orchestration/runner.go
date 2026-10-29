@@ -925,7 +925,7 @@ func (r *EvalRunner) runTest(ctx context.Context, tc *models.TestCase, testNum, 
 		fmt.Fprintf(os.Stderr, "[WARN] Scenario caching disabled for test %q: external workflow dependencies are not fully fingerprinted\n", tc.DisplayName)
 	}
 	if r.cache != nil && spec.Scenario == "" && !models.UsesJudgeEvidence(spec.Graders, tc) {
-		cacheKey, err := cache.CacheKey(spec, tc, r.cfg.FixtureDir())
+		cacheKey, err := cache.CacheKeyWithSpecDir(spec, tc, r.cfg.FixtureDir(), r.cfg.SpecDir())
 		if err == nil {
 			if cachedOutcome, found := r.cache.Get(cacheKey); found {
 				// Return cached outcome with cached flag. Stats derive from the
@@ -1076,8 +1076,22 @@ func (r *EvalRunner) executeAttemptWithRequest(ctx context.Context, tc *models.T
 	var err error
 	var frozenJudgeEvidence *models.JudgeEvidence
 	var promptJudging []models.PromptJudgeObservation
+	var mockAttempt *copilotconfig.MCPMockAttempt
 	diagnosticCategory := "setup"
 	returnWithArtifacts := func(run models.RunResult) models.RunResult {
+		if closeErr := mockAttempt.Close(); closeErr != nil {
+			run.Status = models.StatusError
+			cleanupErr := fmt.Errorf("clean up MCP mock attempt state: %w", closeErr)
+			if run.ErrorMsg != "" {
+				cleanupErr = fmt.Errorf("%s; %w", run.ErrorMsg, cleanupErr)
+			}
+			run.ErrorMsg = cleanupErr.Error()
+			diagnosticCategory = "execution"
+			if resp != nil {
+				resp.Success = false
+				resp.ErrorMsg = run.ErrorMsg
+			}
+		}
 		run.JudgeEvidence = frozenJudgeEvidence
 		run.PromptJudging = promptJudging
 		if attempt > 0 {
@@ -1114,13 +1128,7 @@ func (r *EvalRunner) executeAttemptWithRequest(ctx context.Context, tc *models.T
 	}
 	req = prepared
 	if req == nil {
-		var mockAttempt *copilotconfig.MCPMockAttempt
 		req, mockAttempt, err = r.buildAttemptExecutionRequest(tc)
-		defer func() {
-			if closeErr := mockAttempt.Close(); closeErr != nil {
-				slog.WarnContext(ctx, "failed to clean up MCP mock attempt state", "test", tc.DisplayName, "error", closeErr)
-			}
-		}()
 	}
 	if err != nil {
 		return returnWithArtifacts(models.RunResult{

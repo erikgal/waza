@@ -36,8 +36,9 @@ Whole-tool inline overrides replace discarded fixture responses before admission
 MCP subprocess setup errors also fail execution instead of dropping the mock.
 Single-request legacy conversion is not a transaction: a late setup error lists
 any earlier generated configuration paths for inspection and cleanup. Task
-attempts own their MCP mock configuration and remove partial setup before
-reporting the error.
+attempts own their MCP mock configuration and clean up partial setup before
+reporting the error, or explicitly report retained configuration when cleanup
+cannot complete.
 
 Execution invokes the configured Copilot SDK agent and therefore requires its
 normal runtime credentials:
@@ -59,7 +60,20 @@ and retry starts at the first step. The first matching response still owns the
 call: when its sequence is exhausted, later matching responses are not used.
 Concurrent calls reserve distinct steps; their completion order can differ.
 Waza removes the attempt-owned MCP configuration and state after the attempt,
-including after setup failures; a cleanup failure is logged with its path.
+including after setup failures, using retained directory handles. Cleanup refuses
+detected directory or configuration replacements rather than deleting them.
+A cleanup failure makes the run unsuccessful and reports the original directory
+path. If that directory or an ancestor was renamed, locate the original directory
+before manual cleanup; its configuration and state may remain there.
+This is not a transaction, machine-crash durability, or protection against a hostile
+process running as the same user. Attempt-owned mocks require handle-rooted
+filesystem support and are unavailable on JavaScript and Plan 9 platforms.
+When task caching is enabled, MCP-backed task keys include the resolved mock
+configuration and the task-attempt behavior revision. Older MCP-backed entries
+are invalidated, and changes to effective inline or fixture responses trigger
+execution again. Fixture paths resolve relative to the eval file, independently
+of the task context directory. Tasks without MCP mocks keep their existing keys.
+Scenario workflow caching remains disabled.
 A mock call is not a native user-input callback or proof of an external host UI
 effect.
 There is no automatic retry policy: the agent decides whether to call again,

@@ -9,6 +9,11 @@ test("dependency recovery guide states public support and safety boundaries", as
   await expect(page.locator("main")).toContainText("canceled calls receive no fabricated response");
   await expect(page.locator("main")).toContainText("Sequence state is scoped to one task attempt");
   await expect(page.locator("main")).toContainText("Every task, trial, and retry starts at the first step");
+  await expect(page.locator("main")).toContainText("using retained directory handles");
+  await expect(page.locator("main")).toContainText("A cleanup failure makes the run unsuccessful");
+  await expect(page.locator("main")).toContainText("locate the original directory before manual cleanup");
+  await expect(page.locator("main")).toContainText("Older MCP-backed entries are invalidated");
+  await expect(page.locator("main")).toContainText("Tasks without MCP mocks keep their existing keys");
   await expect(page.locator("main")).toContainText("exit_code omitted");
   await expect(page.locator("main")).toContainText("Writing the expected report without making the required calls does not pass");
   await expect(page.locator("main")).toContainText("undeclared executables may resolve through the host PATH");

@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **MCP mock sequences across turns** - Finite MCP mock sequences now continue across initial, scripted follow-up, and responder-driven turns in one task attempt, even when the native runtime restarts the mock server. Each task, trial, and retry still starts fresh, and existing first-match and exhaustion behavior is unchanged.
+- **MCP mock attempt cleanup ownership** - Cleanup retains directory handles and preserves detected directory/configuration replacements instead of recursively deleting a saved pathname. Incomplete cleanup now makes the run unsuccessful and reports the original directory for manual inspection.
+- **MCP mock cache invalidation** - MCP-backed task cache keys now include the resolved mock configuration and task-attempt behavior revision, invalidating older results and changed inline or fixture responses without changing cache keys for tasks without MCP mocks.
 
 ## [0.39.1] - 2026-10-26
 

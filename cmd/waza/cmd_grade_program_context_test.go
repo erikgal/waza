@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const programContextCopyEnv = "WAZA_TEST_PROGRAM_CONTEXT_COPY"
+const (
+	programContextCopyEnv   = "WAZA_TEST_PROGRAM_CONTEXT_COPY"
+	programContextLitterEnv = "WAZA_TEST_PROGRAM_CONTEXT_LITTER"
+)
 
 // TestProgramGradingContextCopyHelper runs as a program grader and copies the
 // grading context file so the parent test can inspect it.
@@ -36,13 +40,63 @@ func TestProgramGradingContextCopyHelper(t *testing.T) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	if os.Getenv(programContextLitterEnv) != "" {
+		contextPath := os.Getenv(graders.ProgramGradingContextEnv)
+		extra := filepath.Join(filepath.Dir(contextPath), "extra.txt")
+		if err := errors.Join(
+			os.WriteFile(dest+".path", []byte(contextPath), 0o600),
+			os.WriteFile(extra, []byte("program output"), 0o600),
+		); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
 	fmt.Print("context copied")
 	os.Exit(0)
 }
 
-func TestGradeCommand_ProgramGraderReceivesSavedRunContext(t *testing.T) {
+func writeProgramContextTask(t *testing.T, dir string) string {
+	t.Helper()
 	exe, err := os.Executable()
 	require.NoError(t, err)
+	specPath := gradeSpec(t, dir, minimalSpec)
+	writeTaskFile(t, dir, "task.yaml", fmt.Sprintf(`id: task-program
+name: Program context
+inputs:
+  prompt: "Check account"
+graders:
+  - name: context_check
+    type: program
+    config:
+      command: '%s'
+      args: ["-test.run=^TestProgramGradingContextCopyHelper$"]
+      timeout: 60
+`, strings.ReplaceAll(exe, "'", "''")))
+	return specPath
+}
+
+func TestGradeCommand_ProgramGraderContextCleanupFailureFailsGrade(t *testing.T) {
+	dir := t.TempDir()
+	copyPath := filepath.Join(dir, "context-copy.json")
+	t.Setenv(programContextCopyEnv, copyPath)
+	t.Setenv(programContextLitterEnv, "1")
+	specPath := writeProgramContextTask(t, dir)
+	results := gradeResultsFile(t, dir, outcomeWithTasks(taskOutcome("task-program", "saved output")))
+	output := filepath.Join(dir, "graded.json")
+
+	_, err := executeGrade(t, specPath, "--task", "task-program", "--results", results, "--workspace", dir, "--output", output)
+	contextPath, readErr := os.ReadFile(copyPath + ".path")
+	require.NoError(t, readErr)
+	contextDir := filepath.Dir(string(contextPath))
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(contextDir)) })
+
+	require.ErrorContains(t, err, "removing grading context directory "+contextDir)
+	require.NoFileExists(t, output, "a cleanup failure must not produce a graded result")
+	require.NoFileExists(t, string(contextPath), "the verified context file is removed")
+	require.FileExists(t, filepath.Join(contextDir, "extra.txt"), "unverified entries are left in place")
+}
+
+func TestGradeCommand_ProgramGraderReceivesSavedRunContext(t *testing.T) {
 	exitCode := 0
 	recorded := []models.CommandInvocation{{Command: "az", Args: []string{"account", "show"}, ExitCode: &exitCode}}
 
@@ -58,19 +112,7 @@ func TestGradeCommand_ProgramGraderReceivesSavedRunContext(t *testing.T) {
 			dir := t.TempDir()
 			copyPath := filepath.Join(dir, "context-copy.json")
 			t.Setenv(programContextCopyEnv, copyPath)
-			specPath := gradeSpec(t, dir, minimalSpec)
-			writeTaskFile(t, dir, "task.yaml", fmt.Sprintf(`id: task-program
-name: Program context
-inputs:
-  prompt: "Check account"
-graders:
-  - name: context_check
-    type: program
-    config:
-      command: '%s'
-      args: ["-test.run=^TestProgramGradingContextCopyHelper$"]
-      timeout: 60
-`, strings.ReplaceAll(exe, "'", "''")))
+			specPath := writeProgramContextTask(t, dir)
 			task := taskOutcome("task-program", "saved output")
 			task.Runs[0].CommandInvocations = tc.commands
 			results := gradeResultsFile(t, dir, outcomeWithTasks(task))

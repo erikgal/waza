@@ -29,7 +29,11 @@ Runs an external program or script to grade agent output. The agent output is pa
 
 **Grading context file:**
 
-Waza writes the same run evidence that inline [`code`](code.md) graders receive on stdin to a temporary, owner-only file and passes its path in `WAZA_GRADING_CONTEXT`. Stdin is unchanged, so existing program graders keep working. The file is removed after the program exits; if removal fails, grading fails with an error naming the residual file. Programs must treat the file as read-only.
+Waza writes the same run evidence that inline [`code`](code.md) graders receive on stdin to `context.json` in a new private temporary directory and passes the file's path in `WAZA_GRADING_CONTEXT`. Stdin is unchanged, so existing program graders keep working. Programs must treat the file and its directory as read-only.
+
+- **Privacy:** the directory has mode `0700` and the file `0600` on Linux and macOS. On Windows, both get a protected DACL that grants access only to the current user.
+- **Cleanup:** after the program exits, Waza removes the file only after verifying it is still the file it created, then removes the empty directory. On Windows, the file cannot be deleted or renamed while the program runs, and removal goes through the verified handle. On Linux and macOS, a replacement made between verification and removal by a process still running after the grader exits is not prevented.
+- **Failures:** if Waza cannot write, verify or remove these entries, grading fails with an error naming the path. A replaced file and any extra entries are left in place, never deleted.
 
 | Field | Type | Description |
 |-------|------|-------------|

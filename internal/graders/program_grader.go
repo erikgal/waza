@@ -4,10 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -29,14 +26,16 @@ const ProgramGradingContextVersion = 1
 
 // programGrader runs an external program/script to grade agent output.
 // The agent output is passed via stdin, the workspace directory is available
-// as WAZA_WORKSPACE_DIR, and WAZA_GRADING_CONTEXT names a temporary JSON file
-// with the run's grading context (removed after the program exits).
+// as WAZA_WORKSPACE_DIR, and WAZA_GRADING_CONTEXT names a private temporary
+// JSON file with the run's grading context (removed after the program exits).
 // Exit code 0 = pass (1.0), non-zero = fail (0.0).
 type programGrader struct {
 	name    string
 	command string
 	args    []string
 	timeout time.Duration
+
+	contextHooks programContextHooks
 }
 
 // NewProgramGrader creates a [programGrader] that runs an external command to grade output.
@@ -76,51 +75,34 @@ func (pg *programGrader) Kind() models.GraderKind { return models.GraderKindProg
 
 func (pg *programGrader) Grade(ctx context.Context, gradingContext *Context) (*models.GraderResults, error) {
 	return measureTime(func() (*models.GraderResults, error) {
-		contextPath, err := writeProgramGradingContext(gradingContext)
+		data, err := programGradingContextJSON(gradingContext)
+		if err != nil {
+			return nil, fmt.Errorf("program grader '%s': encoding grading context: %w", pg.name, err)
+		}
+		contextFile, err := createProgramContextFile(data, pg.contextHooks)
 		if err != nil {
 			return nil, fmt.Errorf("program grader '%s': writing grading context: %w", pg.name, err)
 		}
 
-		results := pg.run(ctx, gradingContext, contextPath)
+		results := pg.run(ctx, gradingContext, contextFile.path)
 
-		// The file can contain transcript and tool evidence; report residue
-		// instead of claiming a clean result when it cannot be removed.
-		if err := os.Remove(contextPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("program grader '%s': removing grading context file %s: %w", pg.name, contextPath, err)
+		// The file holds transcript and tool evidence; residue or an unverified
+		// replacement is a grading error, never a silently passing result.
+		if err := contextFile.remove(); err != nil {
+			return nil, fmt.Errorf("program grader '%s': cleaning up grading context: %w", pg.name, err)
 		}
 		return results, nil
 	})
 }
 
-// writeProgramGradingContext writes the versioned grading context JSON to an
-// exclusively created, owner-only temporary file and returns its path.
-func writeProgramGradingContext(gradingContext *Context) (string, error) {
-	payload := struct {
+func programGradingContextJSON(gradingContext *Context) ([]byte, error) {
+	return json.Marshal(struct {
 		Version int `json:"version"`
 		gradingContextPayload
 	}{
 		Version:               ProgramGradingContextVersion,
 		gradingContextPayload: newGradingContextPayload(gradingContext),
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-
-	f, err := os.CreateTemp("", "waza-grading-context-*.json")
-	if err != nil {
-		return "", err
-	}
-	path := f.Name()
-	_, writeErr := f.Write(data)
-	closeErr := f.Close()
-	if err := errors.Join(writeErr, closeErr); err != nil {
-		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-			return "", errors.Join(err, fmt.Errorf("removing partial grading context file %s: %w", path, rmErr))
-		}
-		return "", err
-	}
-	return path, nil
+	})
 }
 
 func (pg *programGrader) run(ctx context.Context, gradingContext *Context, contextPath string) *models.GraderResults {

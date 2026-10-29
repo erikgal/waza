@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,6 +34,24 @@ func TestProgramGradingContextHelper(t *testing.T) {
 	} else {
 		report["read_error"] = err.Error()
 	}
+	if err := openContextShareReadOnly(path); err != nil {
+		report["read_error"] = "share-read-only open: " + err.Error()
+	}
+	switch mode {
+	case "litter":
+		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "extra.txt"), []byte("program output"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	case "replace":
+		// Windows blocks deletion while Waza holds its guard handle.
+		if err := os.Remove(path); err != nil {
+			report["replace_error"] = err.Error()
+		} else if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
 	out, err := json.Marshal(report)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -47,14 +66,15 @@ func TestProgramGradingContextHelper(t *testing.T) {
 }
 
 type programContextReport struct {
-	Stdin     string          `json:"stdin"`
-	Path      string          `json:"path"`
-	PathSet   bool            `json:"path_set"`
-	Context   json.RawMessage `json:"context"`
-	ReadError string          `json:"read_error"`
+	Stdin        string          `json:"stdin"`
+	Path         string          `json:"path"`
+	PathSet      bool            `json:"path_set"`
+	Context      json.RawMessage `json:"context"`
+	ReadError    string          `json:"read_error"`
+	ReplaceError string          `json:"replace_error"`
 }
 
-func runProgramContextHelper(t *testing.T, mode string, gradingContext *Context) (*models.GraderResults, programContextReport) {
+func newProgramContextHelperGrader(t *testing.T, mode string) *programGrader {
 	t.Helper()
 	t.Setenv(programContextHelperEnv, mode)
 	exe, err := os.Executable()
@@ -65,6 +85,12 @@ func runProgramContextHelper(t *testing.T, mode string, gradingContext *Context)
 		Timeout: 60,
 	})
 	require.NoError(t, err)
+	return g
+}
+
+func runProgramContextHelper(t *testing.T, mode string, gradingContext *Context) (*models.GraderResults, programContextReport) {
+	t.Helper()
+	g := newProgramContextHelperGrader(t, mode)
 	results, err := g.Grade(t.Context(), gradingContext)
 	require.NoError(t, err)
 

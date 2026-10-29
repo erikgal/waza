@@ -83,6 +83,19 @@ unchanged; it does not downgrade scenario discovery semantics to `1.x`.
 
 ## Changelog
 
+### Task-level MCP mocks (task YAML)
+
+- Added optional `mcp_mocks` to task YAML. Each entry replaces the eval-level
+  mock with the same name for that task and a new name adds a mock; other
+  eval-level mocks still apply. This differs from task `command_mocks`, which
+  replace the whole eval list.
+- Task YAML has no version selector. Task mocks require an enclosing eval
+  `schemaVersion` of `1.1` or newer and `executor: copilot-sdk`, and finite
+  sequences require scenario eval `2.0`. An empty list is rejected.
+- Result cache keys include each task's effective MCP mocks with fixture
+  contents. Tasks that use MCP mocks get new keys once; tasks without them
+  keep their previous keys.
+
 ### Recovery evidence in results 1.7 (#662)
 
 - Finite MCP/CLI sequences require exact eval `schemaVersion: "2.0"`, including

@@ -861,6 +861,22 @@ Replace the eval-level command mock list for this task. The enclosing eval must 
 command_mocks: []
 ```
 
+### mcp_mocks (optional)
+
+Replace or add MCP mocks for this task. Each entry replaces the eval-level [`mcp_mocks`](#mcp_mocks) entry with the same name for this task only, and a new name adds a mock; other eval-level mocks still apply. Entries use the eval-level fields. The enclosing eval must use `schemaVersion: "1.1"` or newer and `executor: copilot-sdk`, and finite response sequences require scenario eval schema `2.0`. Relative `fixtures` paths resolve from the eval directory. The list must not be empty; omit it to use the eval-level mocks.
+
+```yaml
+mcp_mocks:
+  - name: host
+    tools:
+      ask_user:
+        responses:
+          - match_regex: { question: "(?i)publish" }
+            return: { answer: Publish this version, wasFreeform: false }
+          - match_schema: {}
+            return: { answer: Not now, wasFreeform: false }
+```
+
 ## inputs Section
 
 Test inputs passed to the agent.

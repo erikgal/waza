@@ -688,6 +688,14 @@ func (r *EvalRunner) loadTestCasesFromFiles() ([]*models.TestCase, error) {
 				return nil, fmt.Errorf("invalid test case %s: %w", path, err)
 			}
 		}
+		if len(tc.MCPMocks) > 0 {
+			if err := models.ValidateMCPMocksSchemaVersion(spec); err != nil {
+				return nil, fmt.Errorf("invalid test case %s: %w", path, err)
+			}
+			if err := mcpmock.ValidateEvalMocks(tc.MCPMocks, r.cfg.SpecDir(), spec.SchemaVersion); err != nil {
+				return nil, fmt.Errorf("invalid test case %s: MCP mock admission: %w", path, err)
+			}
+		}
 		// Only include active test cases
 		// LoadTestCase defaults Active to true (nil case), so include nil or explicitly true
 		if tc.Active == nil || *tc.Active {
@@ -1114,7 +1122,7 @@ func (r *EvalRunner) executeAttemptWithRequest(ctx context.Context, tc *models.T
 				run.FinalOutput = resp.FinalOutput
 			}
 		}
-		run.DependencyModes = configuredDependencyModes(req, r.cfg.Spec().MCPMocks)
+		run.DependencyModes = configuredDependencyModes(req, models.EffectiveMCPMocks(r.cfg.Spec(), tc))
 		r.captureSnapshot(tc, req, resp, &run, diagnosticCategory)
 		run.RequirementExplanations = evidence.ExplainRequirements(r.cfg.Spec(), tc, &run)
 		r.captureFailureArtifacts(&run)
@@ -1584,7 +1592,7 @@ func (r *EvalRunner) captureFailureArtifacts(run *models.RunResult) {
 
 func (r *EvalRunner) buildExecutionRequest(tc *models.TestCase) (*execution.ExecutionRequest, error) {
 	return r.buildExecutionRequestWithMCP(tc, func(spec *models.EvalSpec) (map[string]copilot.MCPServerConfig, error) {
-		return copilotconfig.ResolveMCPServersWithVersion(spec.Config.ServerConfigs, spec.MCPMocks, r.cfg.SpecDir(), spec.SchemaVersion, warnStderr)
+		return copilotconfig.ResolveMCPServersWithVersion(spec.Config.ServerConfigs, models.EffectiveMCPMocks(spec, tc), r.cfg.SpecDir(), spec.SchemaVersion, warnStderr)
 	})
 }
 
@@ -1592,7 +1600,7 @@ func (r *EvalRunner) buildExecutionRequest(tc *models.TestCase) (*execution.Exec
 func (r *EvalRunner) buildAttemptExecutionRequest(tc *models.TestCase) (*execution.ExecutionRequest, *copilotconfig.MCPMockAttempt, error) {
 	var attempt *copilotconfig.MCPMockAttempt
 	req, err := r.buildExecutionRequestWithMCP(tc, func(spec *models.EvalSpec) (map[string]copilot.MCPServerConfig, error) {
-		servers, owned, err := copilotconfig.ResolveMCPServersForAttempt(spec.Config.ServerConfigs, spec.MCPMocks, r.cfg.SpecDir(), spec.SchemaVersion, warnStderr)
+		servers, owned, err := copilotconfig.ResolveMCPServersForAttempt(spec.Config.ServerConfigs, models.EffectiveMCPMocks(spec, tc), r.cfg.SpecDir(), spec.SchemaVersion, warnStderr)
 		attempt = owned
 		return servers, err
 	})

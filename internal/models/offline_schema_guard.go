@@ -85,19 +85,17 @@ func guardOfflineModelSchemas(data []byte, task bool, validate func(string, Grad
 			errs = append(errs, fmt.Errorf("grader %q: %w", declaration.Identifier, err))
 		}
 	}
-	if !task {
-		for _, mock := range document.MCPMocks {
-			for _, tool := range mock.Tools {
-				for _, response := range tool.Responses {
-					if err := ValidateMCPMockResponseWithLoader(response, schemaloader.Offline{}); err != nil {
-						errs = append(errs, err)
-					}
+	for _, mock := range document.MCPMocks {
+		for _, tool := range mock.Tools {
+			for _, response := range tool.Responses {
+				if err := ValidateMCPMockResponseWithLoader(response, schemaloader.Offline{}); err != nil {
+					errs = append(errs, err)
 				}
 			}
 		}
 	}
 	_, external := schemaloader.ClassifyError(errors.Join(errs...))
-	if external && !task {
+	if external {
 		for _, mock := range document.MCPMocks {
 			for name, tool := range mock.Tools {
 				if err := ValidateMCPInputSchemaOffline(tool.InputSchema, "mock-input-schema.json"); err != nil {

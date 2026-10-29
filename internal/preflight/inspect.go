@@ -168,11 +168,16 @@ func discoverTasks(r *Report, spec *models.EvalSpec, base string) ([]*models.Tes
 				r.add("task.version", Invalid, path, task.TestID, "", "Task mock sequences require explicit enclosing scenario schemaVersion 2.0.", "Select schemaVersion 2.0 with a scenario, or use legacy single responses.")
 			}
 			if err := task.ValidateForExecutor(spec.Config.EngineType); err != nil {
-				r.add("task.executor", Invalid, path, task.TestID, "", "Task settings are incompatible with the configured executor.", "Use copilot-sdk for command mocks and explicit judge reasoning effort.")
+				r.add("task.executor", Invalid, path, task.TestID, "", "Task settings are incompatible with the configured executor.", "Use copilot-sdk for command or MCP mocks and explicit judge reasoning effort.")
 			}
 			if task.CommandMocks != nil {
 				if err := models.ValidateCommandMocksSchemaVersion(spec.SchemaVersion); err != nil {
 					r.add("task.version", Invalid, path, task.TestID, "", "Task command mocks require a supported enclosing schemaVersion.", "Select schemaVersion 1.3 or newer for legacy command mocks.")
+				}
+			}
+			if len(task.MCPMocks) > 0 {
+				if err := models.ValidateMCPMocksSchemaVersion(spec); err != nil {
+					r.add("task.version", Invalid, path, task.TestID, "", "Task MCP mocks require a supported enclosing schemaVersion.", "Select schemaVersion 1.1 or newer for MCP mocks.")
 				}
 			}
 			tasks = append(tasks, task)
@@ -219,37 +224,7 @@ func inspectMCP(r *Report, spec *models.EvalSpec, base string) {
 	mocked := map[string]bool{}
 	for _, mock := range spec.MCPMocks {
 		mocked[strings.TrimSpace(mock.Name)] = true
-		state := Verified
-		cfg, err := mcpmock.FromEvalConfigOfflineWithVersion(mock, base, spec.SchemaVersion)
-		if err != nil {
-			state = r.schemaFailureState(err)
-			r.add("mock.mcp", state, r.Source, "", "", "MCP mock fixtures or matching configuration could not be verified.", "Check fixture files, tool responses, regexes, and self-contained match_schema references.")
-			addMixedExternalDiagnostic(r, err, r.Source)
-		}
-		if cfg != nil {
-			for _, tool := range cfg.Tools {
-				if tool.InputSchema == nil {
-					continue
-				}
-				_, ok := tool.InputSchema.(map[string]any)
-				if !ok {
-					state = Invalid
-					r.add("mock.input_schema", Invalid, r.Source, "", "", "Mock tool input schema is not a JSON object.", "Use an object-valued JSON schema or omit input_schema for the default tool schema.")
-					continue
-				}
-				if err := models.ValidateMCPInputSchemaOffline(tool.InputSchema, filepath.Join(base, "mock-input-schema.json")); err != nil {
-					failure := r.schemaFailureState(err)
-					if state != Invalid {
-						state = failure
-					}
-					r.add("mock.input_schema", failure, r.Source, "", "", "Mock tool input schema could not be verified offline.", "Use valid self-contained JSON schemas.")
-				}
-			}
-		}
-		r.Dependencies = append(r.Dependencies, Dependency{Kind: "mcp", Name: mock.Name, Mode: "mocked", State: state})
-		if _, exists := spec.Config.ServerConfigs[strings.TrimSpace(mock.Name)]; exists {
-			r.add("mock.mcp_override", Verified, r.Source, "", "", "MCP mock replaces the same-named live server configuration.", "Mock output checks the harness, not live service resulting state.")
-		}
+		inspectMCPMock(r, spec, mock, base, r.Source, "")
 	}
 	names := make([]string, 0, len(spec.Config.ServerConfigs))
 	for name := range spec.Config.ServerConfigs {
@@ -288,6 +263,42 @@ func inspectMCP(r *Report, spec *models.EvalSpec, base string) {
 		}
 		r.Dependencies = append(r.Dependencies, Dependency{Kind: "mcp", Name: name, Mode: "live", State: state})
 		r.add("dependency.live", Unresolved, r.Source, "", "", "A live MCP dependency is declared; its availability, credentials, and effects are not verified.", "Validate live dependencies explicitly outside preflight.")
+	}
+}
+
+// inspectMCPMock verifies one eval or task MCP mock offline. Eval mocks pass an
+// empty taskID; task mocks are reported against their task file and identity.
+func inspectMCPMock(r *Report, spec *models.EvalSpec, mock models.MCPMockConfig, base, source, taskID string) {
+	state := Verified
+	cfg, err := mcpmock.FromEvalConfigOfflineWithVersion(mock, base, spec.SchemaVersion)
+	if err != nil {
+		state = r.schemaFailureState(err)
+		r.add("mock.mcp", state, source, taskID, "", "MCP mock fixtures or matching configuration could not be verified.", "Check fixture files, tool responses, regexes, and self-contained match_schema references.")
+		addMixedExternalDiagnostic(r, err, source)
+	}
+	if cfg != nil {
+		for _, tool := range cfg.Tools {
+			if tool.InputSchema == nil {
+				continue
+			}
+			_, ok := tool.InputSchema.(map[string]any)
+			if !ok {
+				state = Invalid
+				r.add("mock.input_schema", Invalid, source, taskID, "", "Mock tool input schema is not a JSON object.", "Use an object-valued JSON schema or omit input_schema for the default tool schema.")
+				continue
+			}
+			if err := models.ValidateMCPInputSchemaOffline(tool.InputSchema, filepath.Join(base, "mock-input-schema.json")); err != nil {
+				failure := r.schemaFailureState(err)
+				if state != Invalid {
+					state = failure
+				}
+				r.add("mock.input_schema", failure, source, taskID, "", "Mock tool input schema could not be verified offline.", "Use valid self-contained JSON schemas.")
+			}
+		}
+	}
+	r.Dependencies = append(r.Dependencies, Dependency{Kind: "mcp", Name: mock.Name, Mode: "mocked", State: state, TaskID: taskID})
+	if _, exists := spec.Config.ServerConfigs[strings.TrimSpace(mock.Name)]; exists {
+		r.add("mock.mcp_override", Verified, source, taskID, "", "MCP mock replaces the same-named live server configuration.", "Mock output checks the harness, not live service resulting state.")
 	}
 }
 
@@ -420,6 +431,18 @@ func inspectTask(r *Report, task *models.TestCase, spec *models.EvalSpec, source
 			state = Invalid
 		}
 		r.Dependencies = append(r.Dependencies, Dependency{Kind: "command", Name: mock.Name, Mode: "mocked", State: state, TaskID: task.TestID})
+	}
+	if len(task.MCPMocks) > 0 {
+		evalMocks := map[string]bool{}
+		for _, mock := range spec.MCPMocks {
+			evalMocks[strings.TrimSpace(mock.Name)] = true
+		}
+		for _, mock := range task.MCPMocks {
+			inspectMCPMock(r, spec, mock, base, source, task.TestID)
+			if evalMocks[strings.TrimSpace(mock.Name)] {
+				r.add("mock.mcp_task_override", Verified, source, task.TestID, "", "Task MCP mock replaces the same-named eval MCP mock for this task.", "Other eval MCP mocks still apply to this task.")
+			}
+		}
 	}
 	if task.Stimulus.Responder != nil {
 		r.Dependencies = append(r.Dependencies, Dependency{Kind: "responder", Name: "model", Mode: "model", State: Unresolved, TaskID: task.TestID})

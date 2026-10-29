@@ -32,7 +32,7 @@ func New(dir string) *Cache {
 // - task content (test case definition)
 // - model ID
 // - fixture file hashes
-// - resolved MCP mocks and their task-attempt behavior revision
+// - resolved MCP mocks
 // MCP fixtures use fixtureDir as their base; use CacheKeyWithSpecDir when the
 // eval and task resource directories differ.
 func CacheKey(spec *models.EvalSpec, task *models.TestCase, fixtureDir string) (string, error) {
@@ -129,8 +129,8 @@ func CacheKeyWithSpecDir(spec *models.EvalSpec, task *models.TestCase, fixtureDi
 			}
 			resolved[cfg.Name] = cfg
 		}
-		// Old keys omitted mocks entirely. Salt only MCP-backed tasks so their
-		// pre-attempt-lifetime results cannot bypass the corrected execution.
+		// Earlier keys omitted MCP mocks, so salt only MCP-backed keys to
+		// invalidate entries that could not reflect their mock configuration.
 		if err := writeString(h, "mcp-mock-attempt-v1"); err != nil {
 			return "", err
 		}

@@ -180,8 +180,15 @@ func TestMCPMockAttemptClosePreservesReplacementDirectories(t *testing.T) {
 			cfg, configFile := attemptConfig(t, servers["counter"])
 			configBody, err := os.ReadFile(configFile)
 			require.NoError(t, err)
-			configIdentity, err := os.Stat(configFile)
+			// Windows defers os.Stat file-ID lookup until SameFile, after this
+			// path has been renamed. Stat through the file handle instead, then
+			// close it before the rename so it cannot pin the original file.
+			configHandle, err := os.Open(configFile)
 			require.NoError(t, err)
+			configIdentity, statErr := configHandle.Stat()
+			configCloseErr := configHandle.Close()
+			require.NoError(t, statErr)
+			require.NoError(t, configCloseErr)
 			canonicalParent, err := filepath.EvalSymlinks(parent)
 			require.NoError(t, err)
 			relativeConfig, err := filepath.Rel(canonicalParent, configFile)

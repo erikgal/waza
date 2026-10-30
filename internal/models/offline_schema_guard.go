@@ -92,7 +92,7 @@ func guardOfflineModelSchemas(data []byte, task bool, validate func(string, Grad
 		for i, mock := range document.MCPMocks {
 			names[i] = MCPMockConfig{Name: mock.Name}
 		}
-		if err := validateMCPMockNames(names); err != nil {
+		if err := ValidateMCPMockNames(names); err != nil {
 			errs = append(errs, err)
 		}
 	}

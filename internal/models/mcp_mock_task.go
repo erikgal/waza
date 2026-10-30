@@ -18,7 +18,8 @@ func ValidateMCPMocksSchemaVersion(spec *EvalSpec) error {
 	return nil
 }
 
-func validateMCPMockNames(mocks []MCPMockConfig) error {
+// ValidateMCPMockNames requires nonempty mock names that are unique after trimming.
+func ValidateMCPMockNames(mocks []MCPMockConfig) error {
 	seen := make(map[string]bool, len(mocks))
 	for i, mock := range mocks {
 		name := strings.TrimSpace(mock.Name)

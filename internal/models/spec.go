@@ -626,7 +626,7 @@ func (s *EvalSpec) Validate() error {
 		if err := ValidateMCPMocksSchemaVersion(s); err != nil {
 			return err
 		}
-		if err := validateMCPMockNames(s.MCPMocks); err != nil {
+		if err := ValidateMCPMockNames(s.MCPMocks); err != nil {
 			return err
 		}
 	}

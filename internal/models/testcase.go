@@ -460,7 +460,7 @@ func (tc *TestCase) Validate() error {
 		if len(tc.MCPMocks) == 0 {
 			return fmt.Errorf("test case %q: mcp_mocks must not be empty; omit it to use the eval mcp_mocks", tc.TestID)
 		}
-		if err := validateMCPMockNames(tc.MCPMocks); err != nil {
+		if err := ValidateMCPMockNames(tc.MCPMocks); err != nil {
 			return fmt.Errorf("test case %q: %w", tc.TestID, err)
 		}
 	}

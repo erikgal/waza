@@ -122,6 +122,9 @@ func ValidateEvalFile(evalPath string) (evalErrs []string, taskErrs map[string][
 					if executorErr := task.ValidateForExecutor(spec.Config.Executor); executorErr != nil {
 						errs = append(errs, executorErr.Error())
 					}
+					if nameErr := models.ValidateMCPMockNames(task.MCPMocks); nameErr != nil {
+						errs = append(errs, nameErr.Error())
+					}
 					if len(task.MCPMocks) > 0 {
 						if versionErr := models.ValidateMCPMocksSchemaVersion(&models.EvalSpec{SchemaVersion: version, Scenario: spec.Scenario}); versionErr != nil {
 							errs = append(errs, versionErr.Error())

@@ -80,3 +80,44 @@ mcp_mocks:
         responses:
           - return: {answer: Publish this version, wasFreeform: false}
 `
+
+func TestValidateEvalFile_TaskMCPMockNamesMustBeUnique(t *testing.T) {
+	eval := `schemaVersion: "1.1"
+name: names
+skill: s
+config:
+  trials_per_task: 1
+  timeout_seconds: 60
+  executor: copilot-sdk
+  model: m
+tasks: ["task.yaml"]
+metrics:
+  - name: pass
+    weight: 1
+    threshold: 1
+`
+	mock := func(name string) string {
+		return "  - name: \"" + name + "\"\n    tools: {ask_user: {responses: [{return: {answer: x}}]}}\n"
+	}
+	for _, test := range []struct {
+		name, first, second, want string
+	}{
+		{"exact duplicate", "host", "host", `mcp_mocks[1].name "host" is duplicated`},
+		{"whitespace-equivalent duplicate", "host", " host", `mcp_mocks[1].name "host" is duplicated`},
+		{"distinct names", "host", "docs", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			task := "id: t\nname: T\ninputs: {prompt: hi}\nmcp_mocks:\n" + mock(test.first) + mock(test.second)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "eval.yaml"), []byte(eval), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "task.yaml"), []byte(task), 0o600))
+			_, taskErrs, err := ValidateEvalFile(filepath.Join(dir, "eval.yaml"))
+			require.NoError(t, err)
+			if test.want == "" {
+				require.Empty(t, taskErrs)
+				return
+			}
+			require.Contains(t, strings.Join(taskErrs["task.yaml"], "\n"), test.want)
+		})
+	}
+}

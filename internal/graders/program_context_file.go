@@ -13,6 +13,7 @@ type programContextHooks struct {
 	write           func(write func([]byte) (int, error), data []byte) (int, error)
 	closeGuard      func(close func() error) error
 	beforeRemove    func(path string)
+	beforeRemoveDir func(dir string) // before the verified directory removal
 	remove          func(remove func() error) error
 }
 

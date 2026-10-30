@@ -148,6 +148,9 @@ func (f *programContextFile) cleanup(created bool) error {
 	dirGuard := f.dirGuard
 	f.dirGuard = windows.InvalidHandle
 	if removed {
+		if f.hooks.beforeRemoveDir != nil {
+			f.hooks.beforeRemoveDir(f.dir)
+		}
 		deleteDir := byte(1) // FILE_DISPOSITION_INFO.DeleteFile
 		if err := windows.SetFileInformationByHandle(dirGuard, windows.FileDispositionInfo, &deleteDir, uint32(unsafe.Sizeof(deleteDir))); err != nil {
 			errs = append(errs, fmt.Errorf("removing grading context directory %s (left in place): %w", f.dir, err))

@@ -93,18 +93,24 @@ func (f *programContextFile) remove() error {
 		}
 		f.guard = nil
 	}
-	if f.root != nil {
-		if err := f.root.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("closing grading context directory %s: %w", f.dir, err))
-		}
-		f.root = nil
-	}
+	// Keep the root (and its directory descriptor) open until the directory
+	// is removed, so its inode cannot be reused by a replacement that would
+	// then pass the identity check.
 	if removed {
+		if f.hooks.beforeRemoveDir != nil {
+			f.hooks.beforeRemoveDir(f.dir)
+		}
 		if err := f.removeVerifiedDir(); err != nil {
 			errs = append(errs, err)
 		}
 	} else {
 		errs = append(errs, fmt.Errorf("grading context directory %s was left in place", f.dir))
+	}
+	if f.root != nil {
+		if err := f.root.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("closing grading context directory %s: %w", f.dir, err))
+		}
+		f.root = nil
 	}
 	return errors.Join(errs...)
 }

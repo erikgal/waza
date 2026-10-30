@@ -13,7 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const programContextHelperEnv = "WAZA_PROGRAM_CONTEXT_HELPER"
+const (
+	programContextHelperEnv = "WAZA_PROGRAM_CONTEXT_HELPER"
+	programContextLinkEnv   = "WAZA_PROGRAM_CONTEXT_LINK"
+)
 
 // TestProgramGradingContextHelper is executed as the program grader. It
 // reports stdin, the context path and the context file bytes as JSON.
@@ -42,6 +45,10 @@ func TestProgramGradingContextHelper(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "extra.txt"), []byte("program output"), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
+		}
+	case "link":
+		if err := os.Link(path, os.Getenv(programContextLinkEnv)); err != nil {
+			report["replace_error"] = err.Error()
 		}
 	case "replace":
 		// Windows blocks deletion while Waza holds its guard handle.

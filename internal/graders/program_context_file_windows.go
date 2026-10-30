@@ -105,7 +105,7 @@ func createProgramContextFile(data []byte, hooks programContextHooks) (_ *progra
 }
 
 func (f *programContextFile) recordIdentity(h windows.Handle) error {
-	id, err := handleFileID(h)
+	id, _, err := handleFileInfo(h)
 	if err != nil {
 		return fmt.Errorf("inspecting grading context file %s: %w", f.path, err)
 	}
@@ -124,6 +124,12 @@ func (f *programContextFile) cleanup(created bool) error {
 	if f.guard != windows.InvalidHandle {
 		guard := f.guard
 		f.guard = windows.InvalidHandle
+		// The guard blocks renaming but not hard links; count names while held.
+		if _, links, err := handleFileInfo(guard); err != nil {
+			errs = append(errs, fmt.Errorf("inspecting grading context file %s: %w", f.path, err))
+		} else if links > 1 {
+			errs = append(errs, fmt.Errorf("grading context file %s was linked elsewhere; %d other name(s) with transcript data remain at unknown paths", f.path, links-1))
+		}
 		if err := f.hooks.doCloseGuard(func() error { return windows.CloseHandle(guard) }); err != nil {
 			errs = append(errs, fmt.Errorf("closing grading context file %s: %w", f.path, err))
 		}
@@ -206,6 +212,10 @@ func (f *programContextFile) removeVerified(errs *[]error) bool {
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING,
 		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		// Deletion and renaming were blocked while the program ran, so a missing
+		// file was moved or deleted by a process that outlived it. Without a
+		// handle Waza cannot tell which, so removal is reported as unverified.
+		*errs = append(*errs, fmt.Errorf("grading context file %s disappeared after the grader exited; it may remain elsewhere with transcript data", f.path))
 		return true
 	}
 	if err != nil {
@@ -217,7 +227,7 @@ func (f *programContextFile) removeVerified(errs *[]error) bool {
 			*errs = append(*errs, fmt.Errorf("closing grading context file %s after removal: %w", f.path, err))
 		}
 	}()
-	id, err := handleFileID(h)
+	id, links, err := handleFileInfo(h)
 	if err != nil {
 		*errs = append(*errs, fmt.Errorf("inspecting grading context file %s (left in place): %w", f.path, err))
 		return false
@@ -225,6 +235,9 @@ func (f *programContextFile) removeVerified(errs *[]error) bool {
 	if id != f.id {
 		*errs = append(*errs, fmt.Errorf("grading context file %s was replaced; the replacement was left in place", f.path))
 		return false
+	}
+	if links > 1 {
+		*errs = append(*errs, fmt.Errorf("grading context file %s has %d other name(s) with transcript data at unknown paths", f.path, links-1))
 	}
 	if err := f.hooks.doRemove(func() error {
 		deleteFile := byte(1) // FILE_DISPOSITION_INFO.DeleteFile
@@ -236,15 +249,15 @@ func (f *programContextFile) removeVerified(errs *[]error) bool {
 	return true
 }
 
-func handleFileID(h windows.Handle) (programContextFileID, error) {
+func handleFileInfo(h windows.Handle) (programContextFileID, uint32, error) {
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
-		return programContextFileID{}, err
+		return programContextFileID{}, 0, err
 	}
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return programContextFileID{}, errors.New("grading context entry is a reparse point")
+		return programContextFileID{}, 0, errors.New("grading context entry is a reparse point")
 	}
-	return programContextFileID{info.VolumeSerialNumber, info.FileIndexHigh, info.FileIndexLow}, nil
+	return programContextFileID{info.VolumeSerialNumber, info.FileIndexHigh, info.FileIndexLow}, info.NumberOfLinks, nil
 }
 
 func currentUserSID() (string, error) {

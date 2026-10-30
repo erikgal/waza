@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // programContextFile is a grading context file in a private (0700) directory.
@@ -80,6 +81,13 @@ func (f *programContextFile) remove() error {
 			f.hooks.beforeRemove(f.path)
 		}
 		removed = f.removeVerified(&errs)
+		if removed {
+			// The retained descriptor still counts every remaining name, so a
+			// file moved or hard-linked elsewhere is reported, not claimed removed.
+			if err := f.checkNoRemainingLinks(); err != nil {
+				errs = append(errs, err)
+			}
+		}
 		if err := f.hooks.doCloseGuard(f.guard.Close); err != nil {
 			errs = append(errs, fmt.Errorf("closing grading context file %s: %w", f.path, err))
 		}
@@ -118,6 +126,21 @@ func (f *programContextFile) removeVerifiedDir() error {
 	}
 	if err := os.Remove(f.dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("removing grading context directory %s (left in place): %w", f.dir, err)
+	}
+	return nil
+}
+
+func (f *programContextFile) checkNoRemainingLinks() error {
+	info, err := f.guard.Stat()
+	if err != nil {
+		return fmt.Errorf("inspecting removed grading context file %s: %w", f.path, err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("grading context file %s link count is unavailable; its removal cannot be verified", f.path)
+	}
+	if links := st.Nlink; links > 0 {
+		return fmt.Errorf("grading context file %s was moved or linked elsewhere; %d name(s) with transcript data remain at unknown paths", f.path, links)
 	}
 	return nil
 }

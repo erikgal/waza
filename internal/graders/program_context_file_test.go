@@ -208,3 +208,27 @@ func TestProgramContextFile_PreexistingDirectoryEntryIsNeverAdopted(t *testing.T
 		})
 	}
 }
+
+func TestProgramContextFile_HardLinkByProgramIsReportedAsResidue(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "kept.json")
+	t.Setenv(programContextLinkEnv, link)
+	_, path, err := gradeWithContextHooks(t, "link", programContextHooks{})
+	if _, statErr := os.Lstat(link); statErr != nil {
+		t.Skipf("platform refused the hard link while Waza held the file: %v", statErr)
+	}
+	require.ErrorContains(t, err, path)
+	require.ErrorContains(t, err, "transcript data remain")
+	require.NoFileExists(t, path, "Waza's own name is still removed")
+	require.FileExists(t, link, "the other name is not Waza's to delete")
+}
+
+func TestProgramContextFile_MovedBeforeCleanupIsReportedAsResidue(t *testing.T) {
+	moved := filepath.Join(t.TempDir(), "moved.json")
+	_, path, err := gradeWithContextHooks(t, "pass", programContextHooks{
+		beforeRemove: func(p string) { require.NoError(t, os.Rename(p, moved)) },
+	})
+	require.ErrorContains(t, err, path)
+	require.ErrorContains(t, err, "transcript data")
+	require.FileExists(t, moved, "a moved file is reported, not deleted")
+	require.NoDirExists(t, filepath.Dir(path), "the now-empty owned directory is removed")
+}

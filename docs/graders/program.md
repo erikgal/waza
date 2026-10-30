@@ -33,7 +33,7 @@ Waza writes the same run evidence that inline [`code`](code.md) graders receive 
 
 - **Privacy:** the directory has mode `0700` and the file `0600` on Linux and macOS. On Windows, both get a protected DACL that grants access only to the current user.
 - **Cleanup:** after the program exits, Waza removes the file only after verifying it is still the file it created. It then removes the empty directory only after verifying it is still the directory it created. On Windows, the directory cannot be renamed while Waza holds it, the file cannot be deleted or renamed while the program runs, and both are removed through verified handles. On Linux and macOS, a replacement made by a same-user process between creating and opening the directory, or between verification and removal, is not prevented.
-- **Failures:** if Waza cannot write, verify or remove these entries, grading fails with an error naming the path. A replaced file and any extra entries are left in place, never deleted.
+- **Failures:** if Waza cannot write, verify or remove these entries, grading fails with an error naming the path. A replaced file and any extra entries are left in place, never deleted. If the context file was moved or hard-linked elsewhere, grading also fails, because transcript data remains at a path Waza cannot verify.
 
 | Field | Type | Description |
 |-------|------|-------------|

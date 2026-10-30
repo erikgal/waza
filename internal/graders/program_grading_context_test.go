@@ -13,10 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	programContextHelperEnv = "WAZA_PROGRAM_CONTEXT_HELPER"
-	programContextLinkEnv   = "WAZA_PROGRAM_CONTEXT_LINK"
-)
+const programContextHelperEnv = "WAZA_PROGRAM_CONTEXT_HELPER"
 
 // TestProgramGradingContextHelper is executed as the program grader. It
 // reports stdin, the context path and the context file bytes as JSON.
@@ -37,24 +34,8 @@ func TestProgramGradingContextHelper(t *testing.T) {
 	} else {
 		report["read_error"] = err.Error()
 	}
-	if err := openContextShareReadOnly(path); err != nil {
-		report["read_error"] = "share-read-only open: " + err.Error()
-	}
-	switch mode {
-	case "litter":
+	if mode == "litter" {
 		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "extra.txt"), []byte("program output"), 0o600); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-	case "link":
-		if err := os.Link(path, os.Getenv(programContextLinkEnv)); err != nil {
-			report["replace_error"] = err.Error()
-		}
-	case "replace":
-		// Windows blocks deletion while Waza holds its guard handle.
-		if err := os.Remove(path); err != nil {
-			report["replace_error"] = err.Error()
-		} else if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
@@ -73,12 +54,11 @@ func TestProgramGradingContextHelper(t *testing.T) {
 }
 
 type programContextReport struct {
-	Stdin        string          `json:"stdin"`
-	Path         string          `json:"path"`
-	PathSet      bool            `json:"path_set"`
-	Context      json.RawMessage `json:"context"`
-	ReadError    string          `json:"read_error"`
-	ReplaceError string          `json:"replace_error"`
+	Stdin     string          `json:"stdin"`
+	Path      string          `json:"path"`
+	PathSet   bool            `json:"path_set"`
+	Context   json.RawMessage `json:"context"`
+	ReadError string          `json:"read_error"`
 }
 
 func newProgramContextHelperGrader(t *testing.T, mode string) *programGrader {

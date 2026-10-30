@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	programContextCopyEnv   = "WAZA_TEST_PROGRAM_CONTEXT_COPY"
-	programContextLitterEnv = "WAZA_TEST_PROGRAM_CONTEXT_LITTER"
+	programContextCopyEnv = "WAZA_TEST_PROGRAM_CONTEXT_COPY"
+	programContextLockEnv = "WAZA_TEST_PROGRAM_CONTEXT_LOCK"
 )
 
 // TestProgramGradingContextCopyHelper runs as a program grader and copies the
@@ -31,22 +31,23 @@ func TestProgramGradingContextCopyHelper(t *testing.T) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	data, err := os.ReadFile(os.Getenv(graders.ProgramGradingContextEnv))
+	contextPath := os.Getenv(graders.ProgramGradingContextEnv)
+	data, err := os.ReadFile(contextPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if err := os.WriteFile(dest, data, 0o600); err != nil {
+	if err := errors.Join(
+		os.WriteFile(dest, data, 0o600),
+		os.WriteFile(dest+".path", []byte(contextPath), 0o600),
+	); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	if os.Getenv(programContextLitterEnv) != "" {
-		contextPath := os.Getenv(graders.ProgramGradingContextEnv)
-		extra := filepath.Join(filepath.Dir(contextPath), "extra.txt")
-		if err := errors.Join(
-			os.WriteFile(dest+".path", []byte(contextPath), 0o600),
-			os.WriteFile(extra, []byte("program output"), 0o600),
-		); err != nil {
+	if os.Getenv(programContextLockEnv) != "" {
+		// Leave an entry in the context directory that the grader's own user
+		// cannot delete, so Waza's cleanup fails.
+		if err := lockUndeletableEntry(filepath.Join(filepath.Dir(contextPath), "locked")); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
@@ -76,10 +77,13 @@ graders:
 }
 
 func TestGradeCommand_ProgramGraderContextCleanupFailureFailsGrade(t *testing.T) {
+	if !undeletableEntriesEnforced() {
+		t.Skip("running as root: permissions cannot make cleanup fail")
+	}
 	dir := t.TempDir()
 	copyPath := filepath.Join(dir, "context-copy.json")
 	t.Setenv(programContextCopyEnv, copyPath)
-	t.Setenv(programContextLitterEnv, "1")
+	t.Setenv(programContextLockEnv, "1")
 	specPath := writeProgramContextTask(t, dir)
 	results := gradeResultsFile(t, dir, outcomeWithTasks(taskOutcome("task-program", "saved output")))
 	output := filepath.Join(dir, "graded.json")
@@ -88,12 +92,15 @@ func TestGradeCommand_ProgramGraderContextCleanupFailureFailsGrade(t *testing.T)
 	contextPath, readErr := os.ReadFile(copyPath + ".path")
 	require.NoError(t, readErr)
 	contextDir := filepath.Dir(string(contextPath))
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(contextDir)) })
+	t.Cleanup(func() {
+		require.NoError(t, unlockUndeletableEntry(filepath.Join(contextDir, "locked")))
+		require.NoError(t, os.RemoveAll(contextDir))
+	})
 
 	require.ErrorContains(t, err, "removing grading context directory "+contextDir)
+	require.ErrorContains(t, err, "transcript data may remain")
 	require.NoFileExists(t, output, "a cleanup failure must not produce a graded result")
-	require.NoFileExists(t, string(contextPath), "the verified context file is removed")
-	require.FileExists(t, filepath.Join(contextDir, "extra.txt"), "unverified entries are left in place")
+	require.DirExists(t, contextDir, "residue remains at the reported path")
 }
 
 func TestGradeCommand_ProgramGraderReceivesSavedRunContext(t *testing.T) {

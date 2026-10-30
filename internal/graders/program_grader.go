@@ -86,8 +86,8 @@ func (pg *programGrader) Grade(ctx context.Context, gradingContext *Context) (*m
 
 		results := pg.run(ctx, gradingContext, contextFile.path)
 
-		// The file holds transcript and tool evidence; residue or an unverified
-		// replacement is a grading error, never a silently passing result.
+		// The file holds transcript and tool evidence; leftover residue is a
+		// grading error, never a silently passing result.
 		if err := contextFile.remove(); err != nil {
 			return nil, fmt.Errorf("program grader '%s': cleaning up grading context: %w", pg.name, err)
 		}

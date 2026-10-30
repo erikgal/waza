@@ -297,8 +297,8 @@ func (r *EvalRunner) notifyProgress(event ProgressEvent) {
 // RunBenchmark executes the entire benchmark
 // If Baseline is enabled, runs twice: skills-enabled and skills-disabled
 func (r *EvalRunner) RunBenchmark(ctx context.Context) (*models.EvaluationOutcome, error) {
-	if err := mcpmock.ValidateEvalMocks(r.cfg.Spec().MCPMocks, r.cfg.SpecDir(), r.cfg.Spec().SchemaVersion); err != nil {
-		return nil, fmt.Errorf("MCP mock admission: %w", err)
+	if err := r.admitEvalMCPMocks(); err != nil {
+		return nil, err
 	}
 	if err := r.engine.Initialize(ctx); err != nil {
 		return nil, err
@@ -627,6 +627,43 @@ func (r *EvalRunner) printSkillImpactReport(withSkills, withoutSkills *models.Ev
 		fmt.Printf("Verdict: Skills have NEUTRAL IMPACT (no net change)\n")
 	}
 	fmt.Println("════════════════════════════════════════════════════════════════")
+}
+
+// AdmitEvalMCPMocks admits eval MCP mocks against the tasks that a run with
+// these filters would select, without starting an engine. An eval mock that
+// every selected task replaces is not started, so only its inline
+// declarations are validated.
+func AdmitEvalMCPMocks(cfg *config.EvalConfig, taskFilters, tagFilters []string) error {
+	r := &EvalRunner{cfg: cfg, taskFilters: taskFilters, tagFilters: tagFilters}
+	return r.admitEvalMCPMocks()
+}
+
+func (r *EvalRunner) admitEvalMCPMocks() error {
+	if err := mcpmock.ValidateEvalMocksForTasks(r.cfg.Spec(), r.admissionTestCases(), r.cfg.SpecDir()); err != nil {
+		return fmt.Errorf("MCP mock admission: %w", err)
+	}
+	return nil
+}
+
+// admissionTestCases selects the tasks a run would execute, without side
+// effects, so eval MCP mocks that every selected task replaces are not
+// admitted. It returns nil when selection fails, which admits every eval mock;
+// the run reports the selection error itself.
+func (r *EvalRunner) admissionTestCases() []*models.TestCase {
+	if len(r.cfg.Spec().MCPMocks) == 0 {
+		return nil
+	}
+	testCases, err := r.loadTestCases()
+	if err != nil {
+		return nil
+	}
+	if len(r.taskFilters) > 0 || len(r.tagFilters) > 0 {
+		testCases, err = FilterTestCases(testCases, r.taskFilters, r.tagFilters)
+		if err != nil {
+			return nil
+		}
+	}
+	return testCases
 }
 
 func (r *EvalRunner) loadTestCases() ([]*models.TestCase, error) {

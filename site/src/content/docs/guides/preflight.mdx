@@ -203,7 +203,11 @@ reported as `mock.mcp` with the task file and task id. When a task cannot be
 decoded offline, for example because a matcher references an external schema,
 its MCP mocks are still checked for executor, schema version, names and fixtures.
 Same-name MCP mocks replace live server declarations; a live server that every
-task replaces with its own mock is not inspected. MCP fixture responses and matchers are parsed
+task replaces with its own mock is not inspected. An eval MCP mock that every
+task replaces is reported as `mock.mcp_replaced` and is not listed as a
+dependency; its fixtures are not read, but its inline tool declarations are
+still validated. `waza run` admits eval mock fixtures the same way, against the
+tasks selected to run. MCP fixture responses and matchers are parsed
 without starting a mock. External schema references are not fetched.
 Fixture and inline `input_schema` must be a JSON object when supplied; strings, numbers,
 booleans and arrays are invalid. Omitting it retains the default tool schema.

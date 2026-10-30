@@ -26,7 +26,7 @@ mcp_mocks:
 `
 	path, _ := writeSuite(t, eval, task)
 	r := Inspect(path, Options{})
-	require.Contains(t, r.Dependencies, Dependency{Kind: "mcp", Name: "host", Mode: "mocked", State: Verified})
+	require.True(t, hasDiagnostic(r, "mock.mcp_replaced", Verified), "the only task replaces the eval host mock: %+v", r.Diagnostics)
 	require.Contains(t, r.Dependencies, Dependency{Kind: "mcp", Name: "host", Mode: "mocked", State: Verified, TaskID: "task"})
 	require.Contains(t, r.Dependencies, Dependency{Kind: "mcp", Name: "extra", Mode: "mocked", State: Invalid, TaskID: "task"})
 	require.True(t, hasDiagnostic(r, "mock.mcp_task_override", Verified))
@@ -135,4 +135,38 @@ mcp_mocks:
 	path, _ = writeSuite(t, eval, validTask)
 	r = Inspect(path, Options{})
 	require.True(t, hasDiagnostic(r, "dependency.mcp_configuration", Invalid), "a task that uses host live still reports its configuration")
+}
+
+func TestInspectEvalMockReplacedByEveryTaskSkipsFixtures(t *testing.T) {
+	eval := strings.ReplaceAll(validEval, "executor: mock", "executor: copilot-sdk") + `
+mcp_mocks:
+  - name: host
+    fixtures: missing-host-fixtures
+`
+	replacing := validTask + `
+mcp_mocks:
+  - name: host
+    tools:
+      ask_user:
+        responses: [{return: {answer: Publish this version}}]
+`
+	path, _ := writeSuite(t, eval, replacing)
+	r := Inspect(path, Options{})
+	require.False(t, r.Failed(false), "%+v", r.Diagnostics)
+	require.False(t, hasDiagnostic(r, "mock.mcp", Invalid), "the replaced eval mock's fixtures are not read: %+v", r.Diagnostics)
+	require.True(t, hasDiagnostic(r, "mock.mcp_replaced", Verified), "%+v", r.Diagnostics)
+	require.Contains(t, r.Dependencies, Dependency{Kind: "mcp", Name: "host", Mode: "mocked", State: Verified, TaskID: "task"})
+	for _, dep := range r.Dependencies {
+		require.False(t, dep.Name == "host" && dep.TaskID == "", "an eval mock that never starts is not a dependency: %+v", dep)
+	}
+
+	path, _ = writeSuite(t, eval, validTask)
+	r = Inspect(path, Options{})
+	require.True(t, hasDiagnostic(r, "mock.mcp", Invalid), "a task that inherits host still needs its fixtures: %+v", r.Diagnostics)
+	require.False(t, hasDiagnostic(r, "mock.mcp_replaced", Verified))
+
+	invalidInline := strings.Replace(eval, "    fixtures: missing-host-fixtures\n", "    fixtures: missing-host-fixtures\n    tools:\n      ask_user:\n        responses: [{match_regex: {question: \"(\"}, return: {answer: x}}]\n", 1)
+	path, _ = writeSuite(t, invalidInline, replacing)
+	r = Inspect(path, Options{})
+	require.True(t, hasDiagnostic(r, "eval.configuration", Invalid), "replaced eval mock declarations are still validated: %+v", r.Diagnostics)
 }

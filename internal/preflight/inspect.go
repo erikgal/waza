@@ -261,6 +261,10 @@ func inspectMCP(r *Report, spec *models.EvalSpec, base string, taskMocks [][]mod
 	mocked := map[string]bool{}
 	for _, mock := range spec.MCPMocks {
 		mocked[strings.TrimSpace(mock.Name)] = true
+		if models.MCPMockReplacedByEveryTask(mock.Name, taskMocks) {
+			inspectReplacedEvalMCPMock(r, spec, mock, base)
+			continue
+		}
 		inspectMCPMock(r, spec, mock, base, r.Source, "")
 	}
 	names := make([]string, 0, len(spec.Config.ServerConfigs))
@@ -269,7 +273,7 @@ func inspectMCP(r *Report, spec *models.EvalSpec, base string, taskMocks [][]mod
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if mocked[name] || replacedByEveryTask(name, taskMocks) {
+		if mocked[name] || models.MCPMockReplacedByEveryTask(name, taskMocks) {
 			continue
 		}
 		state := Unresolved
@@ -300,6 +304,21 @@ func inspectMCP(r *Report, spec *models.EvalSpec, base string, taskMocks [][]mod
 		}
 		r.Dependencies = append(r.Dependencies, Dependency{Kind: "mcp", Name: name, Mode: "live", State: state})
 		r.add("dependency.live", Unresolved, r.Source, "", "", "A live MCP dependency is declared; its availability, credentials, and effects are not verified.", "Validate live dependencies explicitly outside preflight.")
+	}
+}
+
+// inspectReplacedEvalMCPMock handles an eval mock that every task replaces by
+// name. It is never started, so its fixtures are not read and it is not listed
+// as a dependency, but its inline declarations are still validated, as run does.
+func inspectReplacedEvalMCPMock(r *Report, spec *models.EvalSpec, mock models.MCPMockConfig, base string) {
+	r.add("mock.mcp_replaced", Verified, r.Source, "", "", "Every task replaces this eval MCP mock with its own, so it is never started and its fixtures are not read.", "Remove the eval mock, or keep it for tasks added later; its fixtures are checked once a task uses it.")
+	declared, ok := mcpmock.ReplacedEvalMockDeclarations(mock)
+	if !ok {
+		return
+	}
+	if _, err := mcpmock.FromEvalConfigOfflineWithVersion(declared, base, spec.SchemaVersion); err != nil {
+		r.add("mock.mcp", r.schemaFailureState(err), r.Source, "", "", "MCP mock fixtures or matching configuration could not be verified.", "Check fixture files, tool responses, regexes, and self-contained match_schema references.")
+		addMixedExternalDiagnostic(r, err, r.Source)
 	}
 }
 
@@ -560,23 +579,4 @@ func addMixedExternalDiagnostic(r *Report, err error, source string) {
 		r.add("schema.external_reference", Unresolved, source, "", "", "External schema prerequisites remain unavailable alongside invalid configuration.", "Make grader schemas self-contained before treating the inventory as complete; preflight never loads external schema resources.")
 		r.Complete = false
 	}
-}
-
-func replacedByEveryTask(name string, taskMocks [][]models.MCPMockConfig) bool {
-	if len(taskMocks) == 0 {
-		return false
-	}
-	for _, mocks := range taskMocks {
-		replaced := false
-		for _, mock := range mocks {
-			if strings.TrimSpace(mock.Name) == name {
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			return false
-		}
-	}
-	return true
 }

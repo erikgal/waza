@@ -68,6 +68,36 @@ func ValidateEvalMocks(mocks []models.MCPMockConfig, baseDir, version string) er
 	return errors.Join(errs...)
 }
 
+// ReplacedEvalMockDeclarations returns the inline part of an eval mock that
+// every task replaces. Such a mock is never started, so its fixture directory
+// is not read; ok is false when nothing inline remains to validate.
+func ReplacedEvalMockDeclarations(mock models.MCPMockConfig) (models.MCPMockConfig, bool) {
+	mock.Fixtures = ""
+	return mock, len(mock.Tools) > 0
+}
+
+// ValidateEvalMocksForTasks admits the eval mocks that at least one of the
+// given tasks still uses. For a mock that every task replaces by name, only
+// its inline declarations are validated. With no tasks, every eval mock is
+// admitted as before task-level mocks existed.
+func ValidateEvalMocksForTasks(spec *models.EvalSpec, tasks []*models.TestCase, baseDir string) error {
+	taskMocks := models.TaskMCPMocks(tasks)
+	var errs []error
+	for _, mock := range spec.MCPMocks {
+		if models.MCPMockReplacedByEveryTask(mock.Name, taskMocks) {
+			declared, ok := ReplacedEvalMockDeclarations(mock)
+			if !ok {
+				continue
+			}
+			mock = declared
+		}
+		if _, err := FromEvalConfigWithVersion(mock, baseDir, spec.SchemaVersion); err != nil {
+			errs = append(errs, fmt.Errorf("resolve MCP mock %q: %w", mock.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // FromEvalConfigOffline reads declared local fixtures while refusing external
 // schema resources, including the compiler's default filesystem loader.
 // Response validation errors retain the resolved config for inventory only.

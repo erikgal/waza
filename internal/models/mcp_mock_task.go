@@ -62,3 +62,38 @@ func EffectiveMCPMocks(spec *EvalSpec, tc *TestCase) []MCPMockConfig {
 	}
 	return effective
 }
+
+// MCPMockReplacedByEveryTask reports whether every task in taskMocks declares
+// a task mock with the given name. Such an eval mock is never started. It is
+// false when there are no tasks.
+func MCPMockReplacedByEveryTask(name string, taskMocks [][]MCPMockConfig) bool {
+	if len(taskMocks) == 0 {
+		return false
+	}
+	name = strings.TrimSpace(name)
+	for _, mocks := range taskMocks {
+		replaced := false
+		for _, mock := range mocks {
+			if strings.TrimSpace(mock.Name) == name {
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			return false
+		}
+	}
+	return true
+}
+
+// TaskMCPMocks returns each task's declared mcp_mocks, for
+// MCPMockReplacedByEveryTask.
+func TaskMCPMocks(tasks []*TestCase) [][]MCPMockConfig {
+	taskMocks := make([][]MCPMockConfig, 0, len(tasks))
+	for _, task := range tasks {
+		if task != nil {
+			taskMocks = append(taskMocks, task.MCPMocks)
+		}
+	}
+	return taskMocks
+}

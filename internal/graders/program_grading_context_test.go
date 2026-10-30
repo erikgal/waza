@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/microsoft/waza/internal/models"
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,10 @@ func TestProgramGradingContextHelper(t *testing.T) {
 		os.Exit(3)
 	}
 	fmt.Print(string(out))
+	if mode == "hang" {
+		// Outlive the grader timeout so Waza must kill the program.
+		time.Sleep(time.Minute)
+	}
 	os.Exit(0)
 }
 
@@ -171,7 +176,26 @@ func TestProgramGrader_GradingContextRemovedAfterFailure(t *testing.T) {
 	require.False(t, results.Passed)
 	require.Equal(t, 0.0, results.Score)
 	require.NotEmpty(t, report.Context)
-	require.NoFileExists(t, report.Path)
+	require.NoDirExists(t, filepath.Dir(report.Path))
+}
+
+func TestProgramGrader_GradingContextRemovedAfterTimeout(t *testing.T) {
+	g := newProgramContextHelperGrader(t, "hang")
+	g.timeout = 2 * time.Second
+	var contextPath string
+	g.contextHooks.created = func(p string) { contextPath = p }
+
+	results, err := g.Grade(t.Context(), &Context{Output: "out", WorkspaceDir: t.TempDir()})
+	require.NoError(t, err)
+	require.False(t, results.Passed)
+	require.Equal(t, 0.0, results.Score)
+	var report programContextReport
+	stdout, ok := results.Details["stdout"].(string)
+	require.True(t, ok)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report), stdout)
+	require.NotEmpty(t, report.Context, "the program must have read the context before it was killed")
+	require.Equal(t, contextPath, report.Path)
+	require.NoDirExists(t, filepath.Dir(contextPath))
 }
 
 func TestProgramGrader_GradingContextOverridesInheritedValue(t *testing.T) {

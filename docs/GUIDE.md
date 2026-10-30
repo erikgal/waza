@@ -457,6 +457,23 @@ The browser opens automatically to `http://localhost:3000`. You'll see:
 
 ## Command Reference
 
+### `waza runner` (source-build preview)
+
+`waza runner capabilities` advertises implemented versions and capabilities.
+`waza runner negotiate < examples/runner/negotiation.json` checks requirements
+through JSON stdin/stdout without execution.
+`waza runner validate < examples/runner/unit.json` validates one captured tuple;
+`waza runner run < examples/runner/unit.json` executes that exact mock/text attempt
+once, with no discovery, cache or automatic retries. Native execution is not
+implemented in this bounded profile. The HTTP API shares admission/execution;
+live Lab displays pre-execution selection validation and input-derived logical
+identity lineage, with a validation JSON export. CLI stdout can be saved using
+`waza runner validate < examples/runner/unit.json > validation.json`.
+Identity version `sha256-waza-c14n-v1` names input, not observed execution;
+older receipts without it remain unavailable. See the
+[identity guide](../site/src/content/docs/guides/runner-identities.mdx) and
+[canonical contract and migration guide](../site/src/content/docs/guides/runner-contract.mdx).
+
 ### `waza init [directory]`
 
 Initialize a waza project with directory structure.
@@ -802,9 +819,13 @@ authenticated real-execution commands. Adaptive runs can incur usage for both
 models. A responder's `stopped` outcome does not imply the graders passed;
 `abstained` and `cap_exhausted` describe different incomplete conversations.
 
+If responder execution fails without a decision, the run's error and responder
+reason retain the available execution error. See the example's error guidance
+to distinguish execution failures from successful output without a decision.
+
 ### Controlled Dependency Failures
 
-MCP mock `error` responses and command mock `stderr`/`exit_code` responses can model permanent failures or permission denial without contacting the dependency. Legacy responses return the first matching fixture on every call; scenario evals can instead opt into finite recovery sequences. Configured unmatched calls fail closed, and MCP unmatched diagnostics omit argument values. The MCP mock subprocess accepts per-request cancellation without resetting consumed steps or terminating the server. See the [dependency recovery guide](../site/src/content/docs/guides/dependency-recovery.mdx) for dispatch, interruption, and evidence boundaries.
+MCP mock `error` responses and command mock `stderr`/`exit_code` responses can model permanent failures or permission denial without contacting the dependency. Legacy responses return the first matching fixture on every call; scenario evals can instead opt into finite recovery sequences. Configured unmatched calls fail closed, and MCP unmatched diagnostics omit argument values. The MCP mock subprocess accepts per-request cancellation without resetting consumed steps or terminating the server. Finite MCP sequence progress spans every turn of one task attempt and resets for each task, trial, and retry. See the [dependency recovery guide](../site/src/content/docs/guides/dependency-recovery.mdx) for a multi-turn example, cleanup limitations, dispatch, interruption, and evidence boundaries.
 
 Use existing graders and checkpoints to check honest failure reporting and prohibited effects. A mocked interaction or responder message is not proof that an external operation occurred. Undeclared commands remain available through the host `PATH`, and command shim interception does not isolate the filesystem or network. See the [eval guide](../site/src/content/docs/guides/eval-yaml.mdx#choosing-a-test-boundary) for choosing mocked versus live dependencies.
 
@@ -918,7 +939,7 @@ Cache evaluation results to avoid redundant runs:
 waza run evals/code-explainer/eval.yaml --cache -o results.json
 ```
 
-The cache stores results by task ID and model, keyed on the prompt and expected output. Same inputs = same cached results.
+The cache stores results by task ID and model, keyed on the prompt and expected output. Same inputs = same cached results. MCP-backed task keys also include the resolved mock configuration, so changed inline or eval-relative fixture responses run again. Tasks without MCP mocks retain their existing cache keys.
 
 **Use cases:**
 - Development — Iterate on validators without re-running tasks

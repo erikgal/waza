@@ -47,31 +47,23 @@ func createProgramContextFile(data []byte, hooks programContextHooks) (_ *progra
 		return nil, err
 	}
 
-	dir := filepath.Join(os.TempDir(), "waza-grading-context-"+rand.Text())
-	dirPtr, err := windows.UTF16PtrFromString(dir)
+	parent := os.TempDir()
+	name := "waza-grading-context-" + rand.Text()
+	if hooks.beforeCreateDir != nil {
+		hooks.beforeCreateDir(filepath.Join(parent, name))
+	}
+	dirGuard, err := createOwnedDirectory(parent, name, dirSA.SecurityDescriptor)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating private grading context directory %s: %w", filepath.Join(parent, name), err)
 	}
-	if err := windows.CreateDirectory(dirPtr, dirSA); err != nil {
-		return nil, fmt.Errorf("creating private grading context directory %s: %w", dir, err)
-	}
-	f := &programContextFile{dir: dir, path: filepath.Join(dir, programContextFileName), dirGuard: windows.InvalidHandle, guard: windows.InvalidHandle, hooks: hooks}
+	dir := filepath.Join(parent, name)
+	f := &programContextFile{dir: dir, path: filepath.Join(dir, programContextFileName), dirGuard: dirGuard, guard: windows.InvalidHandle, hooks: hooks}
 	created := false
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, f.cleanup(created))
 		}
 	}()
-	dirGuard, err := windows.CreateFile(dirPtr, windows.DELETE|windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING,
-		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
-	if err != nil {
-		return nil, fmt.Errorf("opening grading context directory %s: %w", dir, err)
-	}
-	f.dirGuard = dirGuard
-	if err := checkDirectoryHandle(dirGuard); err != nil {
-		return nil, fmt.Errorf("grading context directory %s: %w", dir, err)
-	}
 	if hooks.created != nil {
 		hooks.created(f.path)
 	}
@@ -163,15 +155,41 @@ func (f *programContextFile) cleanup(created bool) error {
 	return errors.Join(errs...)
 }
 
-func checkDirectoryHandle(h windows.Handle) error {
-	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
-		return err
+// createOwnedDirectory creates name inside parent and returns a handle to the
+// new directory in one NtCreateFile call (FILE_CREATE), so the handle can only
+// refer to the directory this call created; an existing entry of any kind is
+// rejected and never opened. The handle omits FILE_SHARE_DELETE, so the
+// directory cannot be renamed or deleted by others while it is held.
+func createOwnedDirectory(parent, name string, sd *windows.SECURITY_DESCRIPTOR) (windows.Handle, error) {
+	parentPtr, err := windows.UTF16PtrFromString(parent)
+	if err != nil {
+		return windows.InvalidHandle, err
 	}
-	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
-		return errors.New("not a plain directory")
+	const fileAddSubdirectory = 0x0004 // FILE_ADD_SUBDIRECTORY; not exported by x/sys/windows
+	parentHandle, err := windows.CreateFile(parentPtr, windows.FILE_TRAVERSE|fileAddSubdirectory,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return windows.InvalidHandle, fmt.Errorf("opening temporary directory: %w", err)
 	}
-	return nil
+	defer windows.CloseHandle(parentHandle) //nolint:errcheck // read-only parent handle
+
+	objectName, err := windows.NewNTUnicodeString(name)
+	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	attrs := windows.OBJECT_ATTRIBUTES{RootDirectory: parentHandle, ObjectName: objectName, Attributes: windows.OBJ_CASE_INSENSITIVE, SecurityDescriptor: sd}
+	attrs.Length = uint32(unsafe.Sizeof(attrs))
+	var handle windows.Handle
+	var iosb windows.IO_STATUS_BLOCK
+	if err := windows.NtCreateFile(&handle,
+		windows.DELETE|windows.FILE_LIST_DIRECTORY|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
+		&attrs, &iosb, nil, windows.FILE_ATTRIBUTE_DIRECTORY,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, windows.FILE_CREATE,
+		windows.FILE_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT|windows.FILE_OPEN_REPARSE_POINT, 0, 0); err != nil {
+		return windows.InvalidHandle, err
+	}
+	return handle, nil
 }
 
 func (f *programContextFile) removeVerified(errs *[]error) bool {

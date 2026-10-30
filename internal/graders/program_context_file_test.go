@@ -175,3 +175,36 @@ func TestProgramContextFile_ParentDirectoryReplacementIsNotRemoved(t *testing.T)
 		})
 	}
 }
+
+func TestProgramContextFile_PreexistingDirectoryEntryIsNeverAdopted(t *testing.T) {
+	for _, existing := range []string{"empty directory", "regular file"} {
+		t.Run(existing, func(t *testing.T) {
+			g := newProgramContextHelperGrader(t, "pass")
+			var dir string
+			createdCalled := false
+			g.contextHooks = programContextHooks{
+				beforeCreateDir: func(d string) {
+					dir = d
+					t.Cleanup(func() { require.NoError(t, os.RemoveAll(d)) })
+					if existing == "empty directory" {
+						require.NoError(t, os.Mkdir(d, 0o700))
+					} else {
+						require.NoError(t, os.WriteFile(d, []byte("user data"), 0o600))
+					}
+				},
+				created: func(string) { createdCalled = true },
+			}
+			_, err := g.Grade(t.Context(), &Context{Output: "out", WorkspaceDir: t.TempDir()})
+			require.ErrorContains(t, err, "creating private grading context directory "+dir)
+			require.False(t, createdCalled, "no context file may be written into an adopted entry")
+			info, statErr := os.Lstat(dir)
+			require.NoError(t, statErr, "the existing entry must be preserved")
+			require.Equal(t, existing == "empty directory", info.IsDir())
+			if info.IsDir() {
+				entries, readErr := os.ReadDir(dir)
+				require.NoError(t, readErr)
+				require.Empty(t, entries)
+			}
+		})
+	}
+}

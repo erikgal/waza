@@ -8,11 +8,12 @@ const programContextFileName = "context.json"
 // programContextHooks wrap individual context-file steps so tests can inject
 // deterministic failures and replacements per grader, without package globals.
 type programContextHooks struct {
-	created      func(path string)
-	write        func(write func([]byte) (int, error), data []byte) (int, error)
-	closeGuard   func(close func() error) error
-	beforeRemove func(path string)
-	remove       func(remove func() error) error
+	beforeCreateDir func(dir string)
+	created         func(path string)
+	write           func(write func([]byte) (int, error), data []byte) (int, error)
+	closeGuard      func(close func() error) error
+	beforeRemove    func(path string)
+	remove          func(remove func() error) error
 }
 
 func (h programContextHooks) doWrite(write func([]byte) (int, error), data []byte) error {

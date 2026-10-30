@@ -3,6 +3,7 @@
 package graders
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,8 +16,9 @@ import (
 // cannot be reused, and removal happens relative to the retained directory
 // handle only after verifying the entry is still that file. The directory is
 // removed by path only after verifying it is still the directory Waza created.
-// Unix has no unlink-by-descriptor, so a replacement made by a still-running
-// process between verification and removal is not prevented.
+// Unix has no unlink-by-descriptor or create-and-open for directories, so a
+// replacement made by a same-user process between creating and opening the
+// directory, or between verification and removal, is not prevented.
 type programContextFile struct {
 	dir     string
 	path    string
@@ -28,9 +30,13 @@ type programContextFile struct {
 }
 
 func createProgramContextFile(data []byte, hooks programContextHooks) (_ *programContextFile, err error) {
-	dir, err := os.MkdirTemp("", "waza-grading-context-")
-	if err != nil {
-		return nil, err
+	dir := filepath.Join(os.TempDir(), "waza-grading-context-"+rand.Text())
+	if hooks.beforeCreateDir != nil {
+		hooks.beforeCreateDir(dir)
+	}
+	// Mkdir is exclusive: an existing entry is rejected and never adopted.
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating private grading context directory %s: %w", dir, err)
 	}
 	f := &programContextFile{dir: dir, path: filepath.Join(dir, programContextFileName), hooks: hooks}
 	defer func() {

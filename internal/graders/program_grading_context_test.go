@@ -2,6 +2,7 @@ package graders
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const programContextHelperEnv = "WAZA_PROGRAM_CONTEXT_HELPER"
+const (
+	programContextHelperEnv = "WAZA_PROGRAM_CONTEXT_HELPER"
+	programContextMoveEnv   = "WAZA_PROGRAM_CONTEXT_MOVE"
+)
 
 // TestProgramGradingContextHelper is executed as the program grader. It
 // reports stdin, the context path and the context file bytes as JSON.
@@ -35,8 +39,27 @@ func TestProgramGradingContextHelper(t *testing.T) {
 	} else {
 		report["read_error"] = err.Error()
 	}
-	if mode == "litter" {
+	switch mode {
+	case "litter":
 		if err := os.WriteFile(filepath.Join(filepath.Dir(path), "extra.txt"), []byte("program output"), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	case "swapdir":
+		// Move the context directory away and leave a replacement at its path.
+		dir := filepath.Dir(path)
+		if err := errors.Join(os.Rename(dir, dir+".moved"), os.Mkdir(dir, 0o700),
+			os.WriteFile(filepath.Join(dir, "user.txt"), []byte("user data"), 0o600)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	case "swapfile":
+		if err := errors.Join(os.Remove(path), os.WriteFile(path, []byte("user data"), 0o600)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	case "movefile":
+		if err := os.Rename(path, os.Getenv(programContextMoveEnv)); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}

@@ -5,6 +5,7 @@ package graders
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"unsafe"
@@ -75,4 +76,10 @@ func currentUserSID() (string, error) {
 		return "", err
 	}
 	return user.User.Sid.String(), nil
+}
+
+// holdEntry is a no-op on Windows: NTFS file IDs are not promptly reused, and
+// an open handle could block the grader program's own use of the entry.
+func holdEntry(string) (io.Closer, error) {
+	return nil, nil
 }

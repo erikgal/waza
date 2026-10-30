@@ -104,3 +104,32 @@ func TestProgramContextFile_ProgramOutputInContextDirectoryIsRemoved(t *testing.
 	require.NoError(t, err)
 	require.NoDirExists(t, filepath.Dir(path))
 }
+
+func TestProgramContextFile_RenamedAndReplacedDirectoryIsNotRemoved(t *testing.T) {
+	path, err := gradeWithContextHooks(t, "swapdir", programContextHooks{})
+	dir := filepath.Dir(path)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir+".moved")) })
+	require.ErrorContains(t, err, "grading context directory "+dir+" was replaced")
+	require.ErrorContains(t, err, "transcript data may remain elsewhere")
+	data, readErr := os.ReadFile(filepath.Join(dir, "user.txt"))
+	require.NoError(t, readErr, "the replacement directory and its contents must be preserved")
+	require.Equal(t, "user data", string(data))
+	require.FileExists(t, filepath.Join(dir+".moved", programContextFileName), "the moved original is reported, not silently left")
+}
+
+func TestProgramContextFile_ReplacedContextFileIsNotRemoved(t *testing.T) {
+	path, err := gradeWithContextHooks(t, "swapfile", programContextHooks{})
+	require.ErrorContains(t, err, "grading context file "+path+" was replaced")
+	data, readErr := os.ReadFile(path)
+	require.NoError(t, readErr, "the replacement file must be preserved")
+	require.Equal(t, "user data", string(data))
+}
+
+func TestProgramContextFile_MovedContextFileIsReported(t *testing.T) {
+	moved := filepath.Join(t.TempDir(), "moved.json")
+	t.Setenv(programContextMoveEnv, moved)
+	path, err := gradeWithContextHooks(t, "movefile", programContextHooks{})
+	require.ErrorContains(t, err, "grading context file "+path+" was moved or deleted")
+	require.FileExists(t, moved)
+	require.NoDirExists(t, filepath.Dir(path), "Waza's own directory is still removed")
+}

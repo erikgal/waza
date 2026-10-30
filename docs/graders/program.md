@@ -29,11 +29,12 @@ Runs an external program or script to grade agent output. The agent output is pa
 
 **Grading context file:**
 
-Waza writes the same run evidence that inline [`code`](code.md) graders receive on stdin to `context.json` in a new private temporary directory and passes the file's path in `WAZA_GRADING_CONTEXT`. Stdin is unchanged, so existing program graders keep working. After the program exits, Waza deletes the directory and everything in it.
+Waza writes the same run evidence that inline [`code`](code.md) graders receive on stdin to `context.json` in a new private temporary directory and passes the file's path in `WAZA_GRADING_CONTEXT`. Stdin is unchanged, so existing program graders keep working. After the program exits, Waza deletes the directory and everything in it, once it has verified that the directory and `context.json` are still the entries it created.
 
 - **Privacy:** the directory has mode `0700` and the file `0600` on Linux and macOS. On Windows, both get a protected DACL that grants access only to the current user.
+- **Ownership:** if the directory or `context.json` was moved away, deleted or replaced, Waza does not delete the replacement and grading fails with an error naming the path, because transcript data may remain elsewhere. Programs should treat the directory and file as read-only.
 - **Failures:** if the file cannot be written or the directory cannot be removed, grading fails with an error naming the path, so transcript data is never left behind silently.
-- **Trust model:** the grader program and other processes running as the same user are trusted; the program can read and copy the context anyway. The private directory protects against other local users. Races by same-user processes (for example, replacing the directory during cleanup) are out of scope.
+- **Trust model:** the grader program and other processes running as the same user are trusted; the program can read and copy the context anyway. The private directory protects against other local users. A replacement made by a concurrently running same-user process between Waza's check and its deletion is out of scope.
 
 | Field | Type | Description |
 |-------|------|-------------|

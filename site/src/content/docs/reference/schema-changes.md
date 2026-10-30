@@ -96,7 +96,10 @@ unchanged; it does not downgrade scenario discovery semantics to `1.x`.
   unknown-field warning and the key was ignored; it is now applied.
 - Result cache keys include each task's effective MCP mocks with fixture
   contents. Tasks that use MCP mocks get new keys once; tasks without them
-  keep their previous keys.
+  keep their previous keys. A cached outcome whose runs record a mocked MCP
+  server that the task no longer mocks is re-run. Outcomes cached before
+  results 1.7 record no dependency modes and cannot be checked; clear the
+  cache after removing MCP mocks from such an eval.
 
 ### Recovery evidence in results 1.7 (#662)
 

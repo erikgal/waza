@@ -69,3 +69,70 @@ mcp_mocks:
 	r = Inspect(path, Options{})
 	require.True(t, hasDiagnostic(r, "task.version", Invalid), "%+v", r.Diagnostics)
 }
+
+// An external matcher schema leaves the task unresolved, but its executor and
+// fixture problems must still be reported as invalid.
+func TestInspectBlockedTaskMCPMocksKeepIndependentChecks(t *testing.T) {
+	task := validTask + `
+mcp_mocks:
+  - name: host
+    tools:
+      ask_user:
+        responses: [{match_schema: {$ref: "https://example.invalid/schema.json"}, return: {answer: x}}]
+  - name: extra
+    fixtures: missing-fixture-directory
+`
+	path, _ := writeSuite(t, validEval, task)
+	r := Inspect(path, Options{})
+	require.True(t, hasDiagnostic(r, "task.configuration", Unresolved), "%+v", r.Diagnostics)
+	require.True(t, hasDiagnostic(r, "task.executor", Invalid), "%+v", r.Diagnostics)
+	require.Contains(t, r.Dependencies, Dependency{Kind: "mcp", Name: "extra", Mode: "mocked", State: Invalid, TaskID: "task"})
+	require.True(t, r.Failed(false))
+
+	eval := strings.ReplaceAll(strings.ReplaceAll(validEval, "executor: mock", "executor: copilot-sdk"), `schemaVersion: "1.4"`, `schemaVersion: "1.0"`)
+	path, _ = writeSuite(t, eval, task)
+	r = Inspect(path, Options{})
+	require.True(t, hasDiagnostic(r, "task.version", Invalid), "%+v", r.Diagnostics)
+}
+
+func TestInspectBlockedTaskMCPMockDuplicateNamesAreInvalid(t *testing.T) {
+	eval := strings.ReplaceAll(validEval, "executor: mock", "executor: copilot-sdk")
+	task := validTask + `
+mcp_mocks:
+  - name: host
+    tools:
+      ask_user:
+        responses: [{match_schema: {$ref: "https://example.invalid/schema.json"}, return: {answer: x}}]
+  - name: host
+    tools:
+      other:
+        responses: [{return: {answer: y}}]
+`
+	path, _ := writeSuite(t, eval, task)
+	r := Inspect(path, Options{})
+	require.True(t, hasDiagnostic(r, "task.configuration", Invalid), "%+v", r.Diagnostics)
+	require.True(t, hasDiagnostic(r, "schema.external_reference", Unresolved), "%+v", r.Diagnostics)
+}
+
+func TestInspectLiveServerReplacedByEveryTaskIsNotInspected(t *testing.T) {
+	eval := strings.ReplaceAll(validEval, "executor: mock", "executor: copilot-sdk")
+	eval = strings.ReplaceAll(eval, "  model: harness", "  model: harness\n  mcp_servers:\n    host: {}")
+	mocked := validTask + `
+mcp_mocks:
+  - name: host
+    tools:
+      ask_user:
+        responses: [{return: {answer: x}}]
+`
+	path, _ := writeSuite(t, eval, mocked)
+	r := Inspect(path, Options{})
+	require.False(t, hasDiagnostic(r, "dependency.mcp_configuration", Invalid), "%+v", r.Diagnostics)
+	for _, dep := range r.Dependencies {
+		require.False(t, dep.Name == "host" && dep.Mode == "live", "host never runs live: %+v", dep)
+	}
+	require.True(t, hasDiagnostic(r, "mock.mcp_override", Verified))
+
+	path, _ = writeSuite(t, eval, validTask)
+	r = Inspect(path, Options{})
+	require.True(t, hasDiagnostic(r, "dependency.mcp_configuration", Invalid), "a task that uses host live still reports its configuration")
+}

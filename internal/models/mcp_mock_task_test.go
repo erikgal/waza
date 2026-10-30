@@ -152,3 +152,24 @@ func TestValidateMCPMocksSchemaVersion(t *testing.T) {
 	require.NoError(t, ValidateMCPMocksSchemaVersion(&EvalSpec{SchemaVersion: "1.1"}))
 	require.NoError(t, ValidateMCPMocksSchemaVersion(&EvalSpec{SchemaVersion: ScenarioSchemaVersion, Scenario: "s"}))
 }
+
+func TestParseTestCaseOffline_DuplicateMCPMockNamesWithExternalSchema(t *testing.T) {
+	task := []byte(`id: dup
+name: Dup
+inputs:
+  prompt: hi
+mcp_mocks:
+  - name: host
+    tools:
+      ask_user:
+        responses:
+          - match_schema: {$ref: "https://example.invalid/schema.json"}
+            return: {answer: x}
+  - name: host
+    tools:
+      other:
+        responses: [{return: {answer: y}}]
+`)
+	_, err := ParseTestCaseOffline(task, "task.yaml", nil)
+	require.ErrorContains(t, err, `mcp_mocks[1].name "host" is duplicated`)
+}

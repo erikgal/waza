@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/waza/internal/schemaloader"
 	"github.com/microsoft/waza/internal/utils"
 	"github.com/microsoft/waza/internal/validation"
+	"gopkg.in/yaml.v3"
 )
 
 type Options struct {
@@ -73,9 +74,13 @@ func Inspect(evalPath string, opts Options) *Report {
 		r.add("skill.required", Invalid, evalPath, "", "", "Required skills are missing or cannot be parsed in configured eval-level directories.", "Configure readable skill_directories containing every required_skills declaration; runtime discovery precedence is preserved.")
 	}
 	inspectCapabilities(r, spec)
-	inspectMCP(r, spec, base)
 	inspectGraders(r, spec.Graders, evalPath, "", contextDir)
-	tasks, sources := discoverTasks(r, spec, base)
+	tasks, sources, blockedMocks := discoverTasks(r, spec, base)
+	taskMocks := blockedMocks
+	for _, task := range tasks {
+		taskMocks = append(taskMocks, task.MCPMocks)
+	}
+	inspectMCP(r, spec, base, taskMocks)
 	ids := map[string]bool{}
 	for i, task := range tasks {
 		source := sources[i]
@@ -118,13 +123,15 @@ func Inspect(evalPath string, opts Options) *Report {
 	return r
 }
 
-func discoverTasks(r *Report, spec *models.EvalSpec, base string) ([]*models.TestCase, []string) {
+// discoverTasks also returns the declared MCP mocks of each task file that
+// could not be decoded, so live-server inspection still accounts for them.
+func discoverTasks(r *Report, spec *models.EvalSpec, base string) ([]*models.TestCase, []string, [][]models.MCPMockConfig) {
 	if spec.TasksFrom != "" {
 		tasks, err := dataset.LoadTasks(spec, base, time.Unix(0, 0).UTC())
 		if err != nil {
 			r.add("tasks.csv", Invalid, r.Source, "", "", "CSV dataset could not be selected or rendered.", "Check tasks_from containment, CSV headers/rows, range bounds, and template variables.")
 			r.Complete = false
-			return nil, nil
+			return nil, nil, nil
 		}
 		sources := make([]string, len(tasks))
 		source := spec.TasksFrom
@@ -134,10 +141,11 @@ func discoverTasks(r *Report, spec *models.EvalSpec, base string) ([]*models.Tes
 		for i := range sources {
 			sources[i] = source
 		}
-		return tasks, sources
+		return tasks, sources, nil
 	}
 	var tasks []*models.TestCase
 	var sources []string
+	var blockedMocks [][]models.MCPMockConfig
 	for _, pattern := range spec.Tasks {
 		matches, err := filepath.Glob(filepath.Join(base, pattern))
 		if err != nil {
@@ -162,6 +170,7 @@ func discoverTasks(r *Report, spec *models.EvalSpec, base string) ([]*models.Tes
 				r.add("task.configuration", schemaState(err), path, "", "", "Task could not be decoded or validated offline.", "Check prompt/prompt_file, paths, self-contained grader schemas, checkpoints, responder settings, and mocks.")
 				addMixedExternalDiagnostic(r, err, path)
 				r.Complete = false
+				blockedMocks = append(blockedMocks, inspectBlockedTaskMCPMocks(r, spec, data, path, base))
 				continue
 			}
 			if faultErr != nil {
@@ -184,7 +193,32 @@ func discoverTasks(r *Report, spec *models.EvalSpec, base string) ([]*models.Tes
 			sources = append(sources, path)
 		}
 	}
-	return tasks, sources
+	return tasks, sources, blockedMocks
+}
+
+// inspectBlockedTaskMCPMocks checks the MCP mocks of a task whose full decode
+// failed, for example on an external matcher schema. Executor, version, name and
+// fixture problems stay reported as invalid instead of hiding behind an
+// unresolved task. It returns the declared mocks, or nil when even they cannot
+// be read.
+func inspectBlockedTaskMCPMocks(r *Report, spec *models.EvalSpec, data []byte, path, base string) []models.MCPMockConfig {
+	var declared struct {
+		ID       string                 `yaml:"id"`
+		MCPMocks []models.MCPMockConfig `yaml:"mcp_mocks"`
+	}
+	if err := yaml.Unmarshal(data, &declared); err != nil || len(declared.MCPMocks) == 0 {
+		return nil
+	}
+	if spec.Config.EngineType != "copilot-sdk" {
+		r.add("task.executor", Invalid, path, declared.ID, "", "Task settings are incompatible with the configured executor.", "Use copilot-sdk for command or MCP mocks and explicit judge reasoning effort.")
+	}
+	if err := models.ValidateMCPMocksSchemaVersion(spec); err != nil {
+		r.add("task.version", Invalid, path, declared.ID, "", "Task MCP mocks require a supported enclosing schemaVersion.", "Select schemaVersion 1.1 or newer for MCP mocks.")
+	}
+	for _, mock := range declared.MCPMocks {
+		inspectMCPMock(r, spec, mock, base, path, declared.ID)
+	}
+	return declared.MCPMocks
 }
 
 func inspectCapabilities(r *Report, spec *models.EvalSpec) {
@@ -220,7 +254,10 @@ func inspectCapabilities(r *Report, spec *models.EvalSpec) {
 	}
 }
 
-func inspectMCP(r *Report, spec *models.EvalSpec, base string) {
+// inspectMCP inspects eval MCP mocks and live servers. taskMocks holds each
+// discovered task's mcp_mocks; a live server that every task replaces with its
+// own mock is never started, so its configuration is not inspected.
+func inspectMCP(r *Report, spec *models.EvalSpec, base string, taskMocks [][]models.MCPMockConfig) {
 	mocked := map[string]bool{}
 	for _, mock := range spec.MCPMocks {
 		mocked[strings.TrimSpace(mock.Name)] = true
@@ -232,7 +269,7 @@ func inspectMCP(r *Report, spec *models.EvalSpec, base string) {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if mocked[name] {
+		if mocked[name] || replacedByEveryTask(name, taskMocks) {
 			continue
 		}
 		state := Unresolved
@@ -523,4 +560,23 @@ func addMixedExternalDiagnostic(r *Report, err error, source string) {
 		r.add("schema.external_reference", Unresolved, source, "", "", "External schema prerequisites remain unavailable alongside invalid configuration.", "Make grader schemas self-contained before treating the inventory as complete; preflight never loads external schema resources.")
 		r.Complete = false
 	}
+}
+
+func replacedByEveryTask(name string, taskMocks [][]models.MCPMockConfig) bool {
+	if len(taskMocks) == 0 {
+		return false
+	}
+	for _, mocks := range taskMocks {
+		replaced := false
+		for _, mock := range mocks {
+			if strings.TrimSpace(mock.Name) == name {
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			return false
+		}
+	}
+	return true
 }

@@ -85,6 +85,17 @@ func guardOfflineModelSchemas(data []byte, task bool, validate func(string, Grad
 			errs = append(errs, fmt.Errorf("grader %q: %w", declaration.Identifier, err))
 		}
 	}
+	if task {
+		// Report duplicate or missing names even when an external matcher schema
+		// blocks the full decode that would otherwise run TestCase.Validate.
+		names := make([]MCPMockConfig, len(document.MCPMocks))
+		for i, mock := range document.MCPMocks {
+			names[i] = MCPMockConfig{Name: mock.Name}
+		}
+		if err := validateMCPMockNames(names); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	for _, mock := range document.MCPMocks {
 		for _, tool := range mock.Tools {
 			for _, response := range tool.Responses {

@@ -935,7 +935,7 @@ func (r *EvalRunner) runTest(ctx context.Context, tc *models.TestCase, testNum, 
 	if r.cache != nil && spec.Scenario == "" && !models.UsesJudgeEvidence(spec.Graders, tc) {
 		cacheKey, err := cache.CacheKeyWithSpecDir(spec, tc, r.cfg.FixtureDir(), r.cfg.SpecDir())
 		if err == nil {
-			if cachedOutcome, found := r.cache.Get(cacheKey); found {
+			if cachedOutcome, found := r.cache.Get(cacheKey); found && cache.RecordedMCPMocksMatch(cachedOutcome, models.EffectiveMCPMocks(spec, tc)) {
 				// Return cached outcome with cached flag. Stats derive from the
 				// cached runs, so recompute them in case an older waza wrote them.
 				cachedOutcome.Cached = true

@@ -86,3 +86,15 @@ func TestCacheKey_MCPMockFixtureContentChangesKey(t *testing.T) {
 	write("Publish this version")
 	require.NotEqual(t, first, key(), "editing a fixture under the same path must change the key")
 }
+
+func TestRecordedMCPMocksMatch(t *testing.T) {
+	outcome := func(modes ...models.DependencyMode) *models.TestOutcome {
+		return &models.TestOutcome{Runs: []models.RunResult{{DependencyModes: modes}}}
+	}
+	host := models.DependencyMode{Kind: "mcp", Name: "host", Mode: "mocked"}
+	require.True(t, RecordedMCPMocksMatch(outcome(), nil))
+	require.True(t, RecordedMCPMocksMatch(outcome(models.DependencyMode{Kind: "mcp", Name: "host", Mode: "live"}), nil))
+	require.True(t, RecordedMCPMocksMatch(outcome(models.DependencyMode{Kind: "cli", Name: "az", Mode: "mocked"}), nil))
+	require.False(t, RecordedMCPMocksMatch(outcome(host), nil), "a mocked outcome is stale once the mock is removed")
+	require.True(t, RecordedMCPMocksMatch(outcome(host), []models.MCPMockConfig{{Name: " host "}}))
+}

@@ -249,6 +249,28 @@ canonical workflow, target-specific validation steps, and a reusable delegation 
 
 ## Commands
 
+### `waza runner` (source-build preview)
+
+Negotiate, validate offline, then explicitly execute one captured mock/text unit:
+
+```bash
+waza runner capabilities
+waza runner negotiate < examples/runner/negotiation.json
+waza runner validate < examples/runner/unit.json
+waza runner run < examples/runner/unit.json
+```
+
+The source preview implements `negotiation`, `exact-unit` and `inline.mock-text`.
+Only `runner run` starts an engine; each dispatch runs its selected task/trial/
+attempt once, without discovery, cache or retries. Admitted receipts include
+versioned [logical identities](site/src/content/docs/guides/runner-identities.mdx)
+derived from the original captured input, not proof of execution or deduplication.
+Native/paid execution and terminal envelopes remain unavailable. Existing
+local commands and artifacts are unchanged. Captured tasks must explicitly
+declare `inputs.prompt`: `prompt: ""` is valid, but missing `inputs` or
+`inputs: {}` is rejected before runtime construction. See the
+[runner contract, HTTP API, schemas and migration guide](site/src/content/docs/guides/runner-contract.mdx).
+
 ### `waza preflight <eval.yaml>`
 
 Inspect eval setup **offline and agent-free** before execution:

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Runner negotiation 1.0 (first v0.40.0 layer)** - Add offline JSON stdin/stdout `runner capabilities` and `runner negotiate`, matching HTTP APIs, strict request/response schemas, conformance fixtures and live Lab incompatibility diagnostics (#757). Compatibility alone never starts work.
+- **Exact captured mock/text work units (v0.40.0 preview)** - Add `runner validate` / `runner run` and HTTP equivalents with fail-closed shard/task/trial/attempt admission, one fresh engine call, no task scanning, cache or automatic retries, and live Lab selection validation (#758). Each explicit repeat executes again, not deduplication. Native/paid execution, terminal envelopes and container distribution remain unavailable. Existing local commands and artifacts are unchanged; no forms are deprecated. See the [contract and migration guide](site/src/content/docs/guides/runner-contract.mdx).
+- **Input-derived runner identities (v0.40.0 preview)** - Admitted validation/execution receipts now carry `identity` with version `sha256-waza-c14n-v1`, canonical input digest and run/shard/task/trial/attempt lineage through CLI JSON, HTTP, Lab and validation export (#759). Independent frozen source and producer vectors define the stability boundary. Invalid/unadmitted work has no identity; later execution failures retain it without implying execution success. Historical local results and receipts without identities are unchanged and are not backfilled. The unshipped `sha256-json-v1` draft is not compatible; compare version and ID together. See [normalization, conformance and migration](site/src/content/docs/guides/runner-identities.mdx).
+
 ### Fixed
 
 - **MCP mock sequences across turns** - Finite MCP mock sequences now continue across initial, scripted follow-up, and responder-driven turns in one task attempt, even when the native runtime restarts the mock server. Each task, trial, and retry still starts fresh, and existing first-match and exhaustion behavior is unchanged. Existing eval YAML needs no new field or flag. Cleanup refuses detected replacements and fails the run if attempt-owned state cannot be removed.

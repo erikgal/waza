@@ -90,6 +90,34 @@ func TestCapturedOfflineStrictSourceErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCapturedSourceRejectsUnexportedFields(t *testing.T) {
+	for _, control := range []struct {
+		name        string
+		declaration string
+		field       string
+		eval        bool
+	}{
+		{"prompt-presence-true", "capturedinlineprompt: true\n", "capturedinlineprompt", false},
+		{"prompt-presence-false", "capturedinlineprompt: false\n", "capturedinlineprompt", false},
+		{"task-source", "sourcedocument: []\n", "sourcedocument", false},
+		{"eval-source", "sourcedocument: []\n", "sourcedocument", true},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			var err error
+			if control.eval {
+				_, err = ParseCapturedEvalSpecOffline([]byte(capturedEvalFixture+control.declaration), "eval.yaml")
+			} else {
+				_, err = ParseCapturedTestCaseOffline([]byte("id: task\ninputs: {prompt: hello}\n"+control.declaration),
+					"task.yaml", func(string) ([]byte, error) {
+						t.Fatal("invalid source must not read prompt files")
+						return nil, fmt.Errorf("unexpected read")
+					})
+			}
+			require.ErrorContains(t, err, fmt.Sprintf("unknown captured native field %q", control.field))
+		})
+	}
+}
+
 func TestCapturedNativeIntegerSemantics(t *testing.T) {
 	task, err := ParseCapturedTestCaseOffline([]byte("id: task\ninputs: {prompt: hello, context: {hex: 0xFFFFFFFFFFFFFFFF, nested: [9007199254740993]}}\n"),
 		"task.yaml", func(string) ([]byte, error) { return nil, fmt.Errorf("unexpected prompt read") })
@@ -229,4 +257,51 @@ func TestCapturedStringGuardsDoNotChangeLegacyLoaderCoercion(t *testing.T) {
 		return nil, fmt.Errorf("unexpected read")
 	})
 	require.ErrorContains(t, err, "requires !!str")
+}
+
+func TestCapturedInlinePromptPresencePreservesSourceAndLegacyLoading(t *testing.T) {
+	for _, control := range []struct {
+		name    string
+		inputs  string
+		present bool
+		message string
+		reads   int
+	}{
+		{name: "missing-inputs"},
+		{name: "empty-inputs", inputs: "inputs: {}\n"},
+		{name: "empty-prompt", inputs: "inputs: {prompt: ''}\n", present: true},
+		{name: "populated-prompt", inputs: "inputs: {prompt: hello}\n", present: true, message: "hello"},
+		{name: "resolved-file", inputs: "inputs: {prompt_file: prompt.txt}\n", message: "hello", reads: 1},
+		{name: "empty-file", inputs: "inputs: {prompt_file: ''}\n"},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "task.yaml")
+			source := []byte("id: task\nname: Presence\n" + control.inputs)
+			require.NoError(t, os.WriteFile(path, source, 0600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "prompt.txt"), []byte("hello"), 0600))
+			legacy, err := LoadTestCaseOffline(path)
+			require.NoError(t, err, "legacy admission must remain unchanged")
+			require.Equal(t, control.message, legacy.Stimulus.Message)
+			reads := 0
+			captured, err := ParseCapturedTestCaseOffline(source, path, func(requested string) ([]byte, error) {
+				reads++
+				require.Equal(t, filepath.Join(dir, "prompt.txt"), requested)
+				return []byte("hello"), nil
+			})
+			require.NoError(t, err)
+			require.Equal(t, control.reads, reads)
+			require.Equal(t, control.present, captured.HasCapturedInlinePrompt())
+			require.Equal(t, control.message, captured.Stimulus.Message)
+			require.Equal(t, source, captured.SourceBytes())
+			legacyJSON, err := json.Marshal(legacy)
+			require.NoError(t, err)
+			capturedJSON, err := json.Marshal(captured)
+			require.NoError(t, err)
+			require.JSONEq(t, string(legacyJSON), string(capturedJSON), "presence is not a new task wire field")
+			source[0] = 'X'
+			require.Equal(t, control.present, captured.HasCapturedInlinePrompt(), "presence belongs to the captured copy")
+			require.Equal(t, byte('i'), captured.SourceBytes()[0])
+		})
+	}
 }

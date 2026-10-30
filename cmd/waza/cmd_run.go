@@ -785,8 +785,8 @@ func runSingleModel(cmd *cobra.Command, spec *models.EvalSpec, specPath string, 
 		}
 	}
 
-	// Admit eval MCP mocks before the engine starts, against the tasks this
-	// run selects; RunBenchmark repeats the same check.
+	// Admit MCP mocks before the engine starts, against the tasks this run
+	// selects; RunBenchmark repeats the same check.
 	if err := orchestration.AdmitEvalMCPMocks(cfg, taskFilters, tagFilters); err != nil {
 		return nil, err
 	}

@@ -106,8 +106,25 @@ mcp_mocks:
     fixtures: missing-fixture-directory
 `})
 	_, err = runner.loadTestCases()
-	require.ErrorContains(t, err, "MCP mock admission")
-	require.ErrorContains(t, err, `"host"`)
+	require.NoError(t, err, "task fixtures are admitted only for selected active tasks, not at load")
+	require.ErrorContains(t, AdmitEvalMCPMocks(runner.cfg, nil, nil), `task "bad": resolve MCP mock "host"`)
+
+	runner, _ = writeTaskMCPMockEval(t, "1.1", map[string]string{"regex.yaml": `id: regex
+name: Regex
+inputs:
+  prompt: hi
+mcp_mocks:
+  - name: host
+    fixtures: missing-fixture-directory
+    tools:
+      ask_user:
+        responses:
+          - match_regex: {question: "("}
+            return: {answer: Not now}
+`})
+	_, err = runner.loadTestCases()
+	require.ErrorContains(t, err, "MCP mock admission", "inline task declarations are still validated at load")
+	require.ErrorContains(t, err, "invalid regex")
 
 	runner, _ = writeTaskMCPMockEval(t, "1.1", map[string]string{"sequence.yaml": `id: sequence
 name: Sequence

@@ -629,9 +629,10 @@ func (r *EvalRunner) printSkillImpactReport(withSkills, withoutSkills *models.Ev
 	fmt.Println("════════════════════════════════════════════════════════════════")
 }
 
-// AdmitEvalMCPMocks admits eval MCP mocks against the tasks that a run with
-// these filters would select, without starting an engine. An eval mock that
-// every selected task replaces is not started, so only its inline
+// AdmitEvalMCPMocks admits the MCP mocks that a run with these filters would
+// start, without starting an engine: each selected active task's own mocks and
+// every eval mock that at least one selected task still uses. An eval mock that
+// every selected task replaces is never started, so only its inline
 // declarations are validated.
 func AdmitEvalMCPMocks(cfg *config.EvalConfig, taskFilters, tagFilters []string) error {
 	r := &EvalRunner{cfg: cfg, taskFilters: taskFilters, tagFilters: tagFilters}
@@ -639,20 +640,16 @@ func AdmitEvalMCPMocks(cfg *config.EvalConfig, taskFilters, tagFilters []string)
 }
 
 func (r *EvalRunner) admitEvalMCPMocks() error {
-	if err := mcpmock.ValidateEvalMocksForTasks(r.cfg.Spec(), r.admissionTestCases(), r.cfg.SpecDir()); err != nil {
+	if err := mcpmock.ValidateMCPMocksForTasks(r.cfg.Spec(), r.admissionTestCases(), r.cfg.SpecDir()); err != nil {
 		return fmt.Errorf("MCP mock admission: %w", err)
 	}
 	return nil
 }
 
-// admissionTestCases selects the tasks a run would execute, without side
-// effects, so eval MCP mocks that every selected task replaces are not
-// admitted. It returns nil when selection fails, which admits every eval mock;
-// the run reports the selection error itself.
+// admissionTestCases selects the active tasks a run would execute, after task
+// and tag filters, without side effects. It returns nil when selection fails,
+// which admits every eval mock; the run reports the selection error itself.
 func (r *EvalRunner) admissionTestCases() []*models.TestCase {
-	if len(r.cfg.Spec().MCPMocks) == 0 {
-		return nil
-	}
 	testCases, err := r.loadTestCases()
 	if err != nil {
 		return nil
@@ -665,7 +662,6 @@ func (r *EvalRunner) admissionTestCases() []*models.TestCase {
 	}
 	return testCases
 }
-
 func (r *EvalRunner) loadTestCases() ([]*models.TestCase, error) {
 	spec := r.cfg.Spec()
 
@@ -729,7 +725,8 @@ func (r *EvalRunner) loadTestCasesFromFiles() ([]*models.TestCase, error) {
 			if err := models.ValidateMCPMocksSchemaVersion(spec); err != nil {
 				return nil, fmt.Errorf("invalid test case %s: %w", path, err)
 			}
-			if err := mcpmock.ValidateEvalMocks(tc.MCPMocks, r.cfg.SpecDir(), spec.SchemaVersion); err != nil {
+			// Fixtures are admitted only for selected active tasks; see admitEvalMCPMocks.
+			if err := mcpmock.ValidateInlineMockDeclarations(tc.MCPMocks, r.cfg.SpecDir(), spec.SchemaVersion); err != nil {
 				return nil, fmt.Errorf("invalid test case %s: MCP mock admission: %w", path, err)
 			}
 		}

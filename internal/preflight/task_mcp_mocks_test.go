@@ -170,3 +170,27 @@ mcp_mocks:
 	r = Inspect(path, Options{})
 	require.True(t, hasDiagnostic(r, "eval.configuration", Invalid), "replaced eval mock declarations are still validated: %+v", r.Diagnostics)
 }
+
+func TestInspectReplacedEvalMockValidatesInputSchemas(t *testing.T) {
+	eval := strings.ReplaceAll(validEval, "executor: mock", "executor: copilot-sdk") + `
+mcp_mocks:
+  - name: host
+    fixtures: missing-host-fixtures
+    tools:
+      ask_user:
+        input_schema: {type: 42}
+        responses: [{return: {answer: x}}]
+`
+	replacing := validTask + `
+mcp_mocks:
+  - name: host
+    tools:
+      ask_user:
+        responses: [{return: {answer: Publish this version}}]
+`
+	path, _ := writeSuite(t, eval, replacing)
+	r := Inspect(path, Options{})
+	require.True(t, hasDiagnostic(r, "mock.mcp_replaced", Verified), "%+v", r.Diagnostics)
+	require.True(t, hasDiagnostic(r, "mock.input_schema", Invalid), "a replaced mock's inline input schema is still validated: %+v", r.Diagnostics)
+	require.False(t, hasDiagnostic(r, "mock.mcp", Invalid), "its fixtures are still not read: %+v", r.Diagnostics)
+}

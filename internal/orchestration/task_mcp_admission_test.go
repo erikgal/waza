@@ -166,3 +166,47 @@ func TestRunBenchmark_ReplacedEvalMockInlineDeclarationsAreValidated(t *testing.
 	require.NotContains(t, err.Error(), "missing-host-fixtures", "the replaced mock's fixtures are not read")
 	require.Zero(t, engine.initialized)
 }
+
+func missingFixtureTask(id string, enabled bool) string {
+	return "id: " + id + "\nname: " + id + "\nenabled: " + map[bool]string{true: "true", false: "false"}[enabled] + `
+inputs:
+  prompt: Publish the skill.
+mcp_mocks:
+  - name: extra
+    fixtures: missing-task-fixtures
+`
+}
+
+func TestRunBenchmark_TaskMockFixturesAdmittedOnlyForSelectedActiveTasks(t *testing.T) {
+	validHost := `  - name: host
+    tools:
+      ask_user:
+        responses:
+          - match_schema: {}
+            return: {answer: Not now}`
+	for _, test := range []struct {
+		name    string
+		tasks   map[string]string
+		options []RunnerOption
+		wantErr string
+	}{
+		{name: "disabled task", tasks: map[string]string{"first.yaml": admissionReplaceTask("first"), "off.yaml": missingFixtureTask("off", false)}},
+		{name: "filtered-out task", tasks: map[string]string{"first.yaml": admissionReplaceTask("first"), "other.yaml": missingFixtureTask("other", true)}, options: []RunnerOption{WithTaskFilters("first")}},
+		{name: "selected active task", tasks: map[string]string{"first.yaml": admissionReplaceTask("first"), "other.yaml": missingFixtureTask("other", true)}, wantErr: `task "other": resolve MCP mock "extra"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner, engine := writeAdmissionSuite(t, validHost, test.tasks, test.options...)
+			outcome, err := runner.RunBenchmark(t.Context())
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, "MCP mock admission")
+				require.ErrorContains(t, err, test.wantErr)
+				require.Nil(t, outcome)
+				require.Zero(t, engine.initialized, "admission fails before engine initialization")
+				return
+			}
+			require.NoError(t, err, "an unselected task's missing fixtures must not abort the run")
+			require.Len(t, outcome.TestOutcomes, 1)
+			require.Equal(t, "Publish this version", engine.answers["first"])
+		})
+	}
+}

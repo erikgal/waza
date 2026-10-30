@@ -105,10 +105,13 @@ graders:
       language: javascript
       assertions:
         - >-
-          (() => { const calls = tool_events.filter(e => e.tool_name === 'dependency-read');
+          (() => { const ordinal = (call) => { let value = call.result;
+          if (value && typeof value === 'object' && 'content' in value) value = value.content;
+          if (typeof value === 'string') value = JSON.parse(value);
+          return value && value.ordinal; };
+          const calls = tool_events.filter(e => e.tool_name === 'dependency-read');
           return calls.length === 2 && calls.every(e => e.success)
-          && /ordinal\\":1/.test(JSON.stringify(calls[0].result))
-          && /ordinal\\":2/.test(JSON.stringify(calls[1].result)); })()
+          && ordinal(calls[0]) === 1 && ordinal(calls[1]) === 2; })()
 tasks:
   - tasks/*.yaml
 ```

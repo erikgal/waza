@@ -230,7 +230,7 @@ func (f *programContextFile) removeVerified(errs *[]error) bool {
 			*errs = append(*errs, fmt.Errorf("closing grading context file %s after removal: %w", f.path, err))
 		}
 	}()
-	id, links, err := handleFileInfo(h)
+	id, _, err := handleFileInfo(h)
 	if err != nil {
 		*errs = append(*errs, fmt.Errorf("inspecting grading context file %s (left in place): %w", f.path, err))
 		return false
@@ -239,15 +239,22 @@ func (f *programContextFile) removeVerified(errs *[]error) bool {
 		*errs = append(*errs, fmt.Errorf("grading context file %s was replaced; the replacement was left in place", f.path))
 		return false
 	}
-	if links > 1 {
-		*errs = append(*errs, fmt.Errorf("grading context file %s has %d other name(s) with transcript data at unknown paths", f.path, links-1))
-	}
 	if err := f.hooks.doRemove(func() error {
 		deleteFile := byte(1) // FILE_DISPOSITION_INFO.DeleteFile
 		return windows.SetFileInformationByHandle(h, windows.FileDispositionInfo, &deleteFile, uint32(unsafe.Sizeof(deleteFile)))
 	}); err != nil {
 		*errs = append(*errs, fmt.Errorf("removing grading context file %s (left in place): %w", f.path, err))
 		return false
+	}
+	// Count names only after the delete is pending: new hard links to a
+	// delete-pending file are refused, so no name can appear after this check.
+	// The count already excludes this delete-pending name, so any link left is
+	// another name.
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(h, &info); err != nil {
+		*errs = append(*errs, fmt.Errorf("inspecting removed grading context file %s; its removal cannot be verified: %w", f.path, err))
+	} else if info.NumberOfLinks > 0 {
+		*errs = append(*errs, fmt.Errorf("grading context file %s has %d other name(s) with transcript data at unknown paths", f.path, info.NumberOfLinks))
 	}
 	return true
 }

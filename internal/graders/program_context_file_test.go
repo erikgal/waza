@@ -232,3 +232,19 @@ func TestProgramContextFile_MovedBeforeCleanupIsReportedAsResidue(t *testing.T) 
 	require.FileExists(t, moved, "a moved file is reported, not deleted")
 	require.NoDirExists(t, filepath.Dir(path), "the now-empty owned directory is removed")
 }
+
+func TestProgramContextFile_HardLinkAddedJustBeforeDeleteIsReported(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "late.json")
+	var contextPath string
+	_, path, err := gradeWithContextHooks(t, "pass", programContextHooks{
+		created: func(p string) { contextPath = p },
+		remove: func(remove func() error) error {
+			require.NoError(t, os.Link(contextPath, link))
+			return remove()
+		},
+	})
+	require.ErrorContains(t, err, path)
+	require.ErrorContains(t, err, "transcript data")
+	require.FileExists(t, link, "the other name is not Waza's to delete")
+	require.NoFileExists(t, path)
+}
